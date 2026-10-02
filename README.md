@@ -1,4 +1,18 @@
-# [Telegram Desktop][telegram_desktop] – Official Messenger
+# FishGram source
+
+FishGram is an unofficial Telegram Desktop customization based on the Telegram API.
+The initial supported target is Windows 11 x64 portable. This repository contains
+the source fork; build recipes, maintenance instructions and release records live
+in the [FishGram product repository](https://github.com/lonefisher/fishgram).
+
+The current source is an internal candidate. A public binary release requires
+complete search acceptance, a tested cloud-built candidate, and verified signed
+update and recovery behavior. Local historical builds are not official FishGram
+releases. See the product repository for actual verification status.
+
+The upstream instructions and licenses below are retained for reference.
+
+## [Telegram Desktop][telegram_desktop] upstream
 
 This is the complete source code and the build instructions for the official [Telegram][telegram] messenger desktop client, based on the [Telegram API][telegram_api] and the [MTProto][telegram_proto] secure protocol.
 
