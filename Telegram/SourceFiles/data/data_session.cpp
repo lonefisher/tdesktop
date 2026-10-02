@@ -670,6 +670,13 @@ not_null<UserData*> Session::processUser(const MTPUser &data) {
 	}, [&](const MTPDuser &data) {
 		minimal = data.is_min();
 
+		if (!minimal) {
+			// Authoritative payload: record the raw restricted state.
+			result->setRestrictedState(data.is_restricted()
+				? PeerData::RestrictedState::Restricted
+				: PeerData::RestrictedState::Unrestricted);
+		}
+
 		const auto canShareThisContact = result->canShareThisContactFast();
 
 		const auto hasRequirePremiumToWrite
@@ -954,6 +961,10 @@ not_null<PeerData*> Session::processChat(const MTPChat &data) {
 	data.match([&](const MTPDchat &data) {
 		const auto chat = result->asChat();
 
+		// Basic groups have no 'restricted' flag; the payload is
+		// authoritative, so the peer is unrestricted by definition.
+		chat->setRestrictedState(PeerData::RestrictedState::Unrestricted);
+
 		const auto canAddMembers = chat->canAddMembers();
 		if (chat->version() < data.vversion().v) {
 			chat->setVersion(data.vversion().v);
@@ -1037,6 +1048,13 @@ not_null<PeerData*> Session::processChat(const MTPChat &data) {
 		minimal = data.is_min();
 		if (minimal && !result->isLoaded()) {
 			LOG(("API Warning: not loaded minimal channel applied."));
+		}
+
+		if (!minimal) {
+			// Authoritative payload: record the raw restricted state.
+			channel->setRestrictedState(data.is_restricted()
+				? PeerData::RestrictedState::Restricted
+				: PeerData::RestrictedState::Unrestricted);
 		}
 
 		if (const auto accessHash = data.vaccess_hash()) {
@@ -1276,6 +1294,13 @@ not_null<PeerData*> Session::processChat(const MTPChat &data) {
 		minimal = data.is_min();
 		if (minimal && !result->isLoaded()) {
 			LOG(("API Warning: not loaded minimal community applied."));
+		}
+
+		if (!minimal) {
+			// Communities have no 'restricted' flag; the payload is
+			// authoritative, so the peer is unrestricted by definition.
+			channel->setRestrictedState(
+				PeerData::RestrictedState::Unrestricted);
 		}
 
 		if (const auto accessHash = data.vaccess_hash()) {

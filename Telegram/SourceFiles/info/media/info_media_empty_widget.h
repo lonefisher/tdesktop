@@ -9,6 +9,9 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 #include "ui/rp_widget.h"
 #include "info/media/info_media_widget.h"
+#include "base/basic_types.h"
+
+#include <optional>
 
 namespace Ui {
 class FlatLabel;
@@ -25,6 +28,8 @@ public:
 	void setType(Type type);
 	void setSearchQuery(const QString &query);
 	void setLoading(bool loading);
+	void setStatus(QString status, Fn<void()> retry);
+	void setLoadedCount(std::optional<int> count);
 	[[nodiscard]] bool loading() const;
 
 protected:
@@ -38,6 +43,10 @@ private:
 	const style::icon *_icon = nullptr;
 	int _height = 0;
 	bool _loading = false;
+	QString _status;
+	QString _query;
+	Fn<void()> _retry;
+	std::optional<int> _loadedCount;
 
 };
 

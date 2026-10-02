@@ -7,6 +7,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #pragma once
 
+#include "api/api_restricted_global_search.h"
 #include "data/data_messages.h"
 #include "info/media/info_media_common.h"
 #include "base/weak_ptr.h"
@@ -36,7 +37,14 @@ struct GlobalMediaSliceSnapshot {
 	int skippedAfter = 0;
 	int skippedBefore = 0;
 	bool fullyLoaded = false;
+	std::optional<int> exactTotal;
+	int loadedCount = 0;
+	bool hasMore = false;
+	bool partial = false;
+	crl::time retryAfter = 0;
 	std::vector<Data::MessagePosition> positions;
+	Api::RestrictedGlobalSearchCoordinator::ErrorKind error
+		= Api::RestrictedGlobalSearchCoordinator::ErrorKind::None;
 };
 
 class GlobalMediaSlice final {
@@ -48,7 +56,8 @@ public:
 		Key key,
 		std::vector<Data::MessagePosition> items = {},
 		std::optional<int> fullCount = std::nullopt,
-		int skippedAfter = 0);
+		int skippedAfter = 0,
+		std::optional<int> skippedBefore = std::nullopt);
 
 	[[nodiscard]] std::optional<int> fullCount() const;
 	[[nodiscard]] std::optional<int> skippedBefore() const;
@@ -67,6 +76,7 @@ private:
 	std::vector<Data::MessagePosition> _items;
 	std::optional<int> _fullCount;
 	int _skippedAfter = 0;
+	std::optional<int> _skippedBefore;
 
 };
 
@@ -100,6 +110,11 @@ public:
 
 	[[nodiscard]] auto sliceSnapshot() const
 		-> const std::optional<GlobalMediaSliceSnapshot> &;
+	[[nodiscard]] bool restrictedSearchLoading() const;
+	[[nodiscard]] bool restrictedSearchRetryable() const;
+	[[nodiscard]] std::optional<int> restrictedSearchLoadedCount() const;
+	[[nodiscard]] crl::time restrictedSearchCooldown() const;
+	void retryRestrictedSearch();
 
 	std::vector<Media::ListSection> fillSections(
 		not_null<Overview::Layout::Delegate*> delegate) override;
@@ -226,6 +241,11 @@ private:
 		const QString &query,
 		uint64 generation,
 		Fn<void()> loaded);
+	void startRestrictedSearch(const QString &query, uint64 generation);
+	void restrictedSearchPage(
+		QString query,
+		uint64 generation,
+		Api::RestrictedGlobalSearchCoordinator::Page page);
 	[[nodiscard]] std::optional<GlobalMediaSliceSnapshot> makeSnapshot(
 		const SliceUpdate &update) const;
 
@@ -240,6 +260,14 @@ private:
 	uint64 _generation = 0;
 	std::optional<EdgeRequestKey> _edgeRequest;
 	std::optional<GlobalMediaSliceSnapshot> _sliceSnapshot;
+	std::unique_ptr<Api::RestrictedGlobalSearchCoordinator>
+		_restrictedSearch;
+	bool _restrictedSearchPartial = false;
+	bool _restrictedSearchFirstPage = true;
+	bool _restrictedSearchPending = false;
+	bool _restrictedSearchPagePending = false;
+	bool _restrictedSearchHasMore = true;
+	crl::time _restrictedSearchRetryAfter = 0;
 
 	base::flat_set<FullMsgId> _seenIds;
 	std::unordered_map<FullMsgId, Media::CachedItem> _layouts;

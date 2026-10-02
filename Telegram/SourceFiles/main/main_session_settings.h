@@ -58,6 +58,9 @@ public:
 	void setSupportAllSearchResults(bool all);
 	[[nodiscard]] bool supportAllSearchResults() const;
 	[[nodiscard]] rpl::producer<bool> supportAllSearchResultsValue() const;
+	void setRestrictedGlobalSearchEnabled(bool enabled);
+	[[nodiscard]] bool restrictedGlobalSearchEnabled() const;
+	[[nodiscard]] rpl::producer<bool> restrictedGlobalSearchEnabledValue() const;
 	void setSupportAllSilent(bool enabled) {
 		_supportAllSilent = enabled;
 	}
@@ -238,6 +241,7 @@ private:
 	rpl::variable<int> _supportChatsTimeSlice
 		= kDefaultSupportChatsLimitSlice;
 	rpl::variable<bool> _supportAllSearchResults = false;
+	rpl::variable<bool> _restrictedGlobalSearchEnabled = true;
 
 	base::flat_set<uint64> _ratedTranscriptions;
 

@@ -170,6 +170,7 @@ constexpr auto kPreviewPostsLimit = 3;
 [[nodiscard]] object_ptr<SearchEmpty> MakeSearchEmpty(
 		QWidget *parent,
 		SearchState state,
+		bool loading,
 		Fn<void()> resetSearchFilters) {
 	const auto query = state.query.trimmed();
 	const auto hashtag = !query.isEmpty() && (query[0] == '#');
@@ -189,11 +190,13 @@ constexpr auto kPreviewPostsLimit = 3;
 	const auto suggestAllChats = !waiting
 		&& state.tab == ChatSearchTab::MyMessages
 		&& (state.filter != ChatTypeFilter::All || !state.fromArchive);
-	const auto icon = waiting
+	const auto icon = waiting || loading
 		? SearchEmptyIcon::Search
 		: SearchEmptyIcon::NoResults;
 	auto text = TextWithEntities();
-	if (waiting) {
+	if (loading) {
+		text.append(tr::lng_contacts_loading(tr::now));
+	} else if (waiting) {
 		if (hashtag) {
 			text.append(tr::lng_search_tab_by_hashtag(tr::now));
 		} else {
@@ -1533,12 +1536,38 @@ void InnerWidget::paintEvent(QPaintEvent *e) {
 
 		const auto showUnreadInSearchResults = uniqueSearchResults();
 		if (_previewResults.empty() && _searchResults.empty()) {
-			if (_loadingAnimation) {
-				const auto text = tr::lng_contacts_loading(tr::now);
+			if (_loadingAnimation || _restrictedSearchActive) {
+				const auto countText = _restrictedSearchActive
+					? (_restrictedSearchCount
+						? tr::lng_search_found_results(
+							tr::now,
+							lt_count,
+							*_restrictedSearchCount)
+						: tr::lng_search_loaded_results(
+							tr::now,
+							lt_count,
+							_restrictedSearchLoadedCount))
+					: tr::lng_contacts_loading(tr::now);
+				const auto status = _restrictedSearchPending.pending()
+					? tr::lng_contacts_loading(tr::now)
+					: _restrictedSearchStatus;
+				const auto text = status.isEmpty()
+					? countText
+					: (countText + u" · "_q + status);
+				const auto availableWidth = std::max(
+					0,
+					width() - 2 * st::searchedBarPosition.x());
+				const auto elided = st::searchedBarFont->elided(
+					text,
+					availableWidth);
 				p.fillRect(0, 0, fullWidth, st::searchedBarHeight, st::searchedBarBg);
 				p.setFont(st::searchedBarFont);
 				p.setPen(st::searchedBarFg);
-				p.drawTextLeft(st::searchedBarPosition.x(), st::searchedBarPosition.y(), width(), text);
+				p.drawTextLeft(
+					st::searchedBarPosition.x(),
+					st::searchedBarPosition.y(),
+					width(),
+					elided);
 				p.translate(0, st::searchedBarHeight);
 			}
 			return;
@@ -1620,27 +1649,60 @@ void InnerWidget::paintEvent(QPaintEvent *e) {
 				: tr::lng_search_found_results(
 					tr::now,
 					lt_count,
-					_searchedMigratedCount + _searchedCount);
+					_restrictedSearchCount.value_or(
+						_searchedMigratedCount + _searchedCount));
+			const auto countText = _restrictedSearchActive
+				? (_restrictedSearchCount
+					? text
+					: tr::lng_search_loaded_results(
+					tr::now,
+					lt_count,
+					_restrictedSearchLoadedCount))
+				: text;
 			const auto searchLowerText = (_searchHashOrCashtag == HashOrCashtag::None)
 				? _searchState.query.toLower()
 				: QString();
 			p.fillRect(0, 0, fullWidth, st::searchedBarHeight, st::searchedBarBg);
 			p.setFont(st::searchedBarFont);
 			p.setPen(st::searchedBarFg);
-			p.drawTextLeft(st::searchedBarPosition.x(), st::searchedBarPosition.y(), width(), text);
 			const auto filterOver = _selectedChatTypeFilter
 				|| _pressedChatTypeFilter;
 			const auto filterFont = filterOver
 				? st::searchedBarFont->underline()
 				: st::searchedBarFont;
-			if (hasChatTypeFilter()) {
-				const auto text = (_searchState.filter == ChatTypeFilter::All
+			const auto hasFilter = hasChatTypeFilter();
+			const auto filterText = hasFilter
+				? ((_searchState.filter == ChatTypeFilter::All
 					&& !_searchState.fromArchive)
 					? tr::lng_search_filter_non_archived(tr::now)
-					: ChatTypeFilterLabel(_searchState.filter);
+					: ChatTypeFilterLabel(_searchState.filter))
+				: QString();
+			if (hasFilter) {
 				if (!_chatTypeFilterWidth) {
-					_chatTypeFilterWidth = filterFont->width(text);
+					_chatTypeFilterWidth = filterFont->width(filterText);
 				}
+			}
+			const auto filterSpace = hasFilter
+				? (_chatTypeFilterWidth + st::searchedBarPosition.x())
+				: 0;
+			const auto availableWidth = std::max(
+				0,
+				width()
+					- 2 * st::searchedBarPosition.x()
+					- filterSpace);
+			const auto status = _restrictedSearchPending.pending()
+				? tr::lng_contacts_loading(tr::now)
+				: _restrictedSearchStatus;
+			const auto statusText = status.isEmpty()
+				? countText
+				: (countText + u" · "_q + status);
+			p.setFont(st::searchedBarFont);
+			p.drawTextLeft(
+				st::searchedBarPosition.x(),
+				st::searchedBarPosition.y(),
+				width(),
+				st::searchedBarFont->elided(statusText, availableWidth));
+			if (hasFilter) {
 				p.setFont(filterFont);
 				p.drawTextLeft(
 					(width()
@@ -1648,7 +1710,7 @@ void InnerWidget::paintEvent(QPaintEvent *e) {
 						- _chatTypeFilterWidth),
 					st::searchedBarPosition.y(),
 					width(),
-					text);
+					filterText);
 			}
 			p.translate(0, st::searchedBarHeight);
 
@@ -2425,6 +2487,23 @@ void InnerWidget::processGlobalForceClick(QPoint globalPosition) {
 }
 
 void InnerWidget::mousePressEvent(QMouseEvent *e) {
+	const auto statusTextWidth = std::max(
+		0,
+		width()
+			- 2 * st::searchedBarPosition.x()
+			- (hasChatTypeFilter()
+				? (_chatTypeFilterWidth + st::searchedBarPosition.x())
+				: 0));
+	if (!_restrictedSearchStatus.isEmpty()
+		&& e->button() == Qt::LeftButton
+		&& e->pos().y() >= searchedOffset()
+		&& e->pos().y() < searchedOffset() + st::searchedBarHeight
+		&& e->pos().x() >= st::searchedBarPosition.x()
+		&& e->pos().x()
+			< st::searchedBarPosition.x() + statusTextWidth) {
+		_restrictedSearchRetryRequests.fire({});
+		return;
+	}
 	selectByMouse(e->globalPos());
 
 	_pressButton = e->button();
@@ -3960,6 +4039,13 @@ void InnerWidget::contextMenuEvent(QContextMenuEvent *e) {
 		this,
 		row.fullId ? st::defaultPopupMenu : st::popupMenuExpandedSeparator);
 	if (row.fullId) {
+		if (!_restrictedSearchStatus.isEmpty()) {
+			_menu->addAction(
+				tr::lng_settings_restricted_search_retry(tr::now),
+				[=] {
+				_restrictedSearchRetryRequests.fire({});
+			});
+		}
 		if (session().supportMode()) {
 			fillSupportSearchMenu(_menu.get());
 		}
@@ -4367,6 +4453,10 @@ InnerWidget::~InnerWidget() {
 }
 
 void InnerWidget::clearSearchResults(bool alsoPeerSearchResults) {
+	_restrictedSearchActive = false;
+	_restrictedSearchCount = std::nullopt;
+	_restrictedSearchLoadedCount = 0;
+	_restrictedSearchStatus.clear();
 	if (alsoPeerSearchResults) {
 		clearPeerSearchResults();
 	}
@@ -4632,6 +4722,16 @@ bool InnerWidget::uniqueSearchResults() const {
 	return _controller->uniqueChatsInSearchResults(_searchState);
 }
 
+void InnerWidget::restrictedSearchPendingStarted(std::uint64_t generation) {
+	_restrictedSearchPending.begin(generation);
+	refresh();
+}
+
+void InnerWidget::restrictedSearchPendingCancelled(std::uint64_t generation) {
+	_restrictedSearchPending.cancel(generation);
+	refreshEmpty();
+}
+
 bool InnerWidget::hasHistoryInResults(not_null<History*> history) const {
 	using Result = std::unique_ptr<FakeRow>;
 	const auto inSearchResults = ranges::find(
@@ -4732,6 +4832,48 @@ void InnerWidget::searchReceived(
 	refresh();
 }
 
+void InnerWidget::restrictedSearchPage(
+		std::uint64_t generation,
+		const std::vector<Data::MessagePosition> &positions,
+		int loadedCount,
+		std::optional<int> exactTotal,
+		bool hasMore,
+		bool replace,
+		bool uniquePeers,
+		QString status) {
+	if (!_restrictedSearchPending.finishPage(generation)) {
+		return;
+	}
+	_searchWaiting = hasMore;
+	_searchLoading = false;
+	if (replace) {
+		clearSearchResults(false);
+	}
+	_restrictedSearchActive = true;
+	_restrictedSearchCount = exactTotal;
+	_restrictedSearchLoadedCount = loadedCount;
+	_restrictedSearchStatus = std::move(status);
+	const auto key = Key();
+	for (const auto &position : positions) {
+		if (const auto item = session().data().message(position.fullId)) {
+			if (uniquePeers && hasHistoryInResults(item->history())) {
+				continue;
+			}
+			const auto index = int(_searchResults.size());
+			_searchResults.push_back(std::make_unique<FakeRow>(
+				key,
+				item,
+				[=] { repaintSearchResult(index); }));
+			trackResultsHistory(item->history());
+			if (uniquePeers && !item->history()->unreadCountKnown()) {
+				item->history()->owner().histories().requestDialogEntry(
+					item->history());
+			}
+		}
+	}
+	refresh();
+}
+
 void InnerWidget::peerSearchReceived(Api::PeerSearchResult result) {
 	if (_state != WidgetState::Filtered) {
 		return;
@@ -4773,6 +4915,10 @@ void InnerWidget::peerSearchReceived(Api::PeerSearchResult result) {
 			std::make_unique<PeerSearchResult>(peer));
 	}
 	refresh();
+}
+
+rpl::producer<> InnerWidget::restrictedSearchRetryRequests() const {
+	return _restrictedSearchRetryRequests.events();
 }
 
 Data::Folder *InnerWidget::shownFolder() const {
@@ -4844,9 +4990,15 @@ void InnerWidget::refresh(bool toTop) {
 		}
 	} else if (_state == WidgetState::Filtered) {
 		if (_searchEmpty && !_searchEmpty->isHidden()) {
-			h = searchedOffset() + st::recentPeersEmptyHeightMin;
+			h = searchedOffset()
+				+ (_restrictedSearchActive
+					? st::searchedBarHeight
+					: 0)
+				+ st::recentPeersEmptyHeightMin;
 			_searchEmpty->setMinimalHeight(st::recentPeersEmptyHeightMin);
-			_searchEmpty->move(0, h - st::recentPeersEmptyHeightMin);
+			_searchEmpty->move(
+				0,
+				h - st::recentPeersEmptyHeightMin);
 		} else if (_loadingAnimation) {
 			h = searchedOffset() + _loadingAnimation->height();
 		} else {
@@ -4869,13 +5021,21 @@ void InnerWidget::refreshEmpty() {
 			&& _searchResults.empty()
 			&& _peerSearchResults.empty()
 			&& _hashtagResults.empty();
-		if (_searchLoading || _searchWaiting || !empty) {
+		const auto pending = _restrictedSearchPending.pending();
+		const auto nativeLoading = _searchLoading || _searchWaiting;
+		if (!empty) {
 			if (_searchEmpty) {
 				_searchEmpty->hide();
 			}
-		} else if (_searchEmptyState != _searchState) {
+		} else if (!pending && (_searchLoading || _searchWaiting)) {
+			if (_searchEmpty) {
+				_searchEmpty->hide();
+			}
+		} else if (_searchEmptyState != _searchState
+			|| _searchEmptyLoadingState != pending) {
 			_searchEmptyState = _searchState;
-			_searchEmpty = MakeSearchEmpty(this, _searchState, [=] {
+			_searchEmptyLoadingState = pending;
+			_searchEmpty = MakeSearchEmpty(this, _searchState, pending, [=] {
 				_resetSearchRestrictionsRequests.fire({});
 			});
 			if (_controller->session().data().chatsListLoaded()) {
@@ -4885,7 +5045,7 @@ void InnerWidget::refreshEmpty() {
 			_searchEmpty->show();
 		}
 
-		if ((!_searchLoading && !_searchWaiting) || !empty) {
+		if (pending || !nativeLoading || !empty) {
 			_loadingAnimation.destroy();
 		} else if (!_loadingAnimation) {
 			_loadingAnimation = Ui::CreateLoadingDialogRowWidget(
@@ -4900,6 +5060,7 @@ void InnerWidget::refreshEmpty() {
 		_searchEmpty.destroy();
 		_loadingAnimation.destroy();
 		_searchEmptyState = {};
+		_searchEmptyLoadingState = false;
 	}
 
 	const auto data = &session().data();

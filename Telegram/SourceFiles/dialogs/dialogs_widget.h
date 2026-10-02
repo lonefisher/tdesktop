@@ -8,6 +8,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #pragma once
 
 #include "api/api_peer_search.h"
+#include "api/api_restricted_global_search.h"
 #include "base/timer.h"
 #include "dialogs/dialogs_key.h"
 #include "window/section_widget.h"
@@ -179,6 +180,10 @@ private:
 	void completeHashtag(QString tag);
 	void requestPublicPosts(bool fromStart);
 	void requestMessages(bool fromStart);
+	void startRestrictedGlobalSearch(
+		crl::time officialDelay,
+		crl::time supplementDelay);
+	void restrictedGlobalSearchPage(Api::RestrictedGlobalSearchCoordinator::Page page);
 	[[nodiscard]] not_null<SearchProcessState*> currentSearchProcess();
 
 	[[nodiscard]] bool computeSearchWithPostsPreview() const;
@@ -418,6 +423,10 @@ private:
 	bool _postponeProcessSearchFocusChange = false;
 
 	base::Timer _searchTimer;
+	std::unique_ptr<Api::RestrictedGlobalSearchCoordinator> _restrictedGlobalSearch;
+	uint64 _restrictedSearchGeneration = 0;
+	bool _restrictedSearchFirstPage = true;
+	bool _restrictedSearchRetryPending = false;
 
 	QString _topicSearchQuery;
 	TimeId _topicSearchOffsetDate = 0;

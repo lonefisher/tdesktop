@@ -2132,6 +2132,10 @@ void PeerData::setLoadedStatus(LoadedStatus status) {
 	_loadedStatus = status;
 }
 
+void PeerData::setRestrictedState(RestrictedState state) {
+	_restrictedState = state;
+}
+
 TimeId PeerData::messagesTTL() const {
 	return _ttlPeriod;
 }

@@ -51,6 +51,11 @@ void EmptyWidget::setType(Type type) {
 }
 
 void EmptyWidget::setSearchQuery(const QString &query) {
+	_query = query;
+	if (!_status.isEmpty()) {
+		return;
+	}
+	_loadedCount = std::nullopt;
 	_text->setText([&] {
 		switch (_type) {
 		case Type::Photo:
@@ -88,6 +93,45 @@ void EmptyWidget::setLoading(bool loading) {
 	_text->setVisible(!_loading);
 	resizeToWidth(width());
 	update();
+}
+
+void EmptyWidget::setStatus(QString status, Fn<void()> retry) {
+	_status = std::move(status);
+	_retry = std::move(retry);
+	if (!_status.isEmpty()) {
+		_text->setText(_status);
+		_text->setClickHandlerFilter([=](const ClickHandlerPtr &, Qt::MouseButton) {
+			if (_retry) {
+				_retry();
+			}
+			return true;
+		});
+		_text->setCursor(style::cur_pointer);
+	} else {
+		_text->setClickHandlerFilter({});
+		if (_loadedCount) {
+			_text->setText(tr::lng_search_loaded_results(
+				tr::now,
+				lt_count,
+				*_loadedCount));
+		} else {
+			setSearchQuery(_query);
+		}
+		_text->setCursor(style::cur_default);
+	}
+	resizeToWidth(width());
+}
+
+void EmptyWidget::setLoadedCount(std::optional<int> count) {
+	_loadedCount = count;
+	if (_status.isEmpty() && _loadedCount) {
+		_text->setText(tr::lng_search_loaded_results(
+			tr::now,
+			lt_count,
+			*_loadedCount));
+	} else if (_status.isEmpty()) {
+		setSearchQuery(_query);
+	}
 }
 
 bool EmptyWidget::loading() const {

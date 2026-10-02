@@ -5991,7 +5991,16 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 "lng_search_no_results" = "No messages found";
 "lng_search_found_results#one" = "Found {count} message";
 "lng_search_found_results#other" = "Found {count} messages";
+"lng_search_loaded_results#one" = "Loaded {count} message";
+"lng_search_loaded_results#other" = "Loaded {count} messages";
+"lng_settings_restricted_search_incomplete" = "Some chats could not be searched";
+"lng_settings_restricted_search_retry" = "Retry restricted search";
+"lng_restricted_search_network" = "Network error";
+"lng_restricted_search_flood" = "Rate limit";
+"lng_restricted_search_timeout" = "Request timed out";
+"lng_restricted_search_protocol" = "Unexpected search response";
 "lng_search_global_results" = "Global search results";
+"lng_settings_restricted_global_search" = "Search restricted chats in global search";
 "lng_search_messages_from" = "Show messages from";
 "lng_search_messages_n_of_amount" = "{n} of {amount}";
 "lng_search_messages_none" = "No results";

@@ -15,6 +15,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "dialogs/dialogs_community_rows_view.h"
 #include "dialogs/dialogs_inner_widget_accessibility.h"
 #include "dialogs/dialogs_key.h"
+#include "dialogs/restricted_search_pending.h"
 #include "lang/lang_keys.h"
 #include "ui/effects/animations.h"
 #include "ui/dragging_scroll_manager.h"
@@ -144,6 +145,19 @@ public:
 		HistoryItem *inject,
 		SearchRequestType type,
 		int fullCount);
+	[[nodiscard]] bool uniqueSearchResults() const;
+	void restrictedSearchPendingStarted(std::uint64_t generation);
+	void restrictedSearchPendingCancelled(std::uint64_t generation);
+	void restrictedSearchPage(
+		std::uint64_t generation,
+		const std::vector<Data::MessagePosition> &positions,
+		int loadedCount,
+		std::optional<int> exactTotal,
+		bool hasMore,
+		bool replace,
+		bool uniquePeers,
+		QString status);
+	rpl::producer<> restrictedSearchRetryRequests() const;
 	void peerSearchReceived(Api::PeerSearchResult result);
 
 	[[nodiscard]] FilterId filterId() const;
@@ -407,7 +421,6 @@ private:
 			|| _selectedMorePosts
 			|| _selectedChatTypeFilter;
 	}
-	bool uniqueSearchResults() const;
 	bool hasHistoryInResults(not_null<History*> history) const;
 
 	int defaultRowTop(not_null<Row*> row) const;
@@ -729,6 +742,11 @@ private:
 
 	std::vector<std::unique_ptr<FakeRow>> _searchResults;
 	int _searchedCount = 0;
+	bool _restrictedSearchActive = false;
+	RestrictedSearchPending _restrictedSearchPending;
+	std::optional<int> _restrictedSearchCount;
+	int _restrictedSearchLoadedCount = 0;
+	QString _restrictedSearchStatus;
 	int _searchedMigratedCount = 0;
 	int _searchedSelected = -1;
 	int _searchedPressed = -1;
@@ -751,9 +769,11 @@ private:
 	rpl::event_stream<> _cancelSearchRequests;
 	rpl::event_stream<> _cancelSearchFromRequests;
 	rpl::event_stream<> _changeSearchFromRequests;
+	rpl::event_stream<> _restrictedSearchRetryRequests;
 	object_ptr<Ui::RpWidget> _loadingAnimation = { nullptr };
 	object_ptr<SearchEmpty> _searchEmpty = { nullptr };
 	SearchState _searchEmptyState;
+	bool _searchEmptyLoadingState = false;
 	object_ptr<Ui::FlatLabel> _empty = { nullptr };
 	object_ptr<Ui::VerticalLayout> _emptyList = { nullptr };
 	object_ptr<Ui::RoundButton> _emptyButton = { nullptr };

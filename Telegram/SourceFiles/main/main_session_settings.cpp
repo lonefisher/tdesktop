@@ -95,6 +95,7 @@ QByteArray SessionSettings::serialize() const {
 	for (const auto &id : _extraFavoriteReactions) {
 		size += sizeof(quint64) + Serialize::stringSize(id.emoji());
 	}
+	size += sizeof(qint32); // _restrictedGlobalSearchEnabled
 
 	auto result = QByteArray();
 	result.reserve(size);
@@ -187,6 +188,7 @@ QByteArray SessionSettings::serialize() const {
 		for (const auto &id : _extraFavoriteReactions) {
 			stream << quint64(id.custom()) << id.emoji();
 		}
+		stream << qint32(_restrictedGlobalSearchEnabled.current() ? 1 : 0);
 	}
 
 	Ensures(result.size() == size);
@@ -263,6 +265,7 @@ void SessionSettings::addFromSerialized(const QByteArray &serialized) {
 	qint32 disableSharingBoxShowsCount = 0;
 	qint32 phoneNumberHidden = 0;
 	std::vector<Data::ReactionId> extraFavoriteReactions;
+	qint32 restrictedGlobalSearchEnabled = 1;
 
 	stream >> versionTag;
 	if (versionTag == kVersionTag) {
@@ -745,6 +748,9 @@ void SessionSettings::addFromSerialized(const QByteArray &serialized) {
 			}
 		}
 	}
+	if (!stream.atEnd()) {
+		stream >> restrictedGlobalSearchEnabled;
+	}
 	if (stream.status() != QDataStream::Ok) {
 		LOG(("App Error: "
 			"Bad data for SessionSettings::addFromSerialized()"));
@@ -811,6 +817,7 @@ void SessionSettings::addFromSerialized(const QByteArray &serialized) {
 	_disableSharingBoxShowsCount = disableSharingBoxShowsCount;
 	_phoneNumberHidden = (phoneNumberHidden == 1);
 	_extraFavoriteReactions = std::move(extraFavoriteReactions);
+	_restrictedGlobalSearchEnabled = (restrictedGlobalSearchEnabled != 0);
 
 	if (version < 2) {
 		app.setLastSeenWarningSeen(appLastSeenWarningSeen == 1);
@@ -882,6 +889,18 @@ bool SessionSettings::supportAllSearchResults() const {
 
 rpl::producer<bool> SessionSettings::supportAllSearchResultsValue() const {
 	return _supportAllSearchResults.value();
+}
+
+void SessionSettings::setRestrictedGlobalSearchEnabled(bool enabled) {
+	_restrictedGlobalSearchEnabled = enabled;
+}
+
+bool SessionSettings::restrictedGlobalSearchEnabled() const {
+	return _restrictedGlobalSearchEnabled.current();
+}
+
+rpl::producer<bool> SessionSettings::restrictedGlobalSearchEnabledValue() const {
+	return _restrictedGlobalSearchEnabled.value();
 }
 
 void SessionSettings::setArchiveCollapsed(bool collapsed) {

@@ -92,6 +92,13 @@ public:
 		-> rpl::producer<std::optional<GlobalMediaSliceView>>;
 	[[nodiscard]] rpl::producer<> globalMediaSliceRefreshStarts() const;
 	[[nodiscard]] bool globalMediaSliceRefreshInProgress() const;
+	[[nodiscard]] bool globalMediaRestrictedSearchLoading() const;
+	[[nodiscard]] auto globalMediaSearchSnapshotValue() const
+		-> rpl::producer<std::optional<GlobalMedia::GlobalMediaSliceSnapshot>>;
+	[[nodiscard]] bool globalMediaRestrictedSearchRetryable() const;
+	[[nodiscard]] std::optional<int> globalMediaRestrictedSearchLoadedCount() const;
+	[[nodiscard]] crl::time globalMediaRestrictedSearchCooldown() const;
+	void retryGlobalMediaRestrictedSearch();
 	void setGlobalMediaEmbeddedViewport();
 	rpl::producer<SelectedItems> selectedListValue() const;
 	void setPreloadEnabled(bool enabled);
@@ -405,6 +412,8 @@ private:
 	rpl::event_stream<std::optional<GlobalMediaSliceView>>
 		_globalMediaSliceViewChanges;
 	rpl::event_stream<> _globalMediaSliceRefreshStarts;
+	rpl::event_stream<std::optional<GlobalMedia::GlobalMediaSliceSnapshot>>
+		_globalMediaSearchSnapshotUpdates;
 	bool _globalMediaSliceRefreshInProgress = false;
 	bool _globalMediaEmbeddedViewport = false;
 

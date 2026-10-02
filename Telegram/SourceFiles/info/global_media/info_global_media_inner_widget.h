@@ -31,6 +31,10 @@ class ListWidget;
 class EmptyWidget;
 } // namespace Info::Media
 
+namespace Ui {
+class FlatLabel;
+} // namespace Ui
+
 namespace Info::GlobalMedia {
 
 class Memento;
@@ -73,6 +77,7 @@ private:
 
 	object_ptr<Media::ListWidget> _list = { nullptr };
 	object_ptr<Media::EmptyWidget> _empty;
+	object_ptr<Ui::FlatLabel> _status = { nullptr };
 
 	bool _inResize = false;
 

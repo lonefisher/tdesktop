@@ -109,6 +109,10 @@ nice_target_sources(Telegram ${src_loc}
 PRIVATE
     ${style_files}
 
+    api/api_restricted_global_search.cpp
+    api/api_restricted_global_search.h
+    api/restricted_search_merge.h
+    api/restricted_search_schedule.h
     api/api_attached_stickers.cpp
     api/api_attached_stickers.h
     api/api_authorizations.cpp

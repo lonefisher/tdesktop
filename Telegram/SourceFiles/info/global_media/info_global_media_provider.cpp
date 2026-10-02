@@ -6,8 +6,10 @@ For license and copyright information please follow this link:
 https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "info/global_media/info_global_media_provider.h"
+#include "info/global_media/restricted_global_media_pagination.h"
 
 #include "apiwrap.h"
+#include "data/data_search_controller.h"
 #include "base/algorithm.h"
 #include "info/media/info_media_widget.h"
 #include "info/media/info_media_list_section.h"
@@ -19,6 +21,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "data/data_media_types.h"
 #include "data/data_session.h"
 #include "main/main_session.h"
+#include "main/main_session_settings.h"
 #include "main/main_account.h"
 #include "history/history_item.h"
 #include "history/history_item_helpers.h"
@@ -41,11 +44,13 @@ GlobalMediaSlice::GlobalMediaSlice(
 	Key key,
 	std::vector<Data::MessagePosition> items,
 	std::optional<int> fullCount,
-	int skippedAfter)
+	int skippedAfter,
+	std::optional<int> skippedBefore)
 : _key(key)
 , _items(std::move(items))
 , _fullCount(fullCount)
-, _skippedAfter(skippedAfter) {
+, _skippedAfter(skippedAfter)
+, _skippedBefore(skippedBefore) {
 }
 
 std::optional<int> GlobalMediaSlice::fullCount() const {
@@ -53,9 +58,9 @@ std::optional<int> GlobalMediaSlice::fullCount() const {
 }
 
 std::optional<int> GlobalMediaSlice::skippedBefore() const {
-	return _fullCount
+	return _skippedBefore ? _skippedBefore : (_fullCount
 		? int(*_fullCount - _skippedAfter - _items.size())
-		: std::optional<int>();
+		: std::optional<int>());
 }
 
 std::optional<int> GlobalMediaSlice::skippedAfter() const {
@@ -116,6 +121,10 @@ Provider::Provider(not_null<AbstractController*> controller)
 , _type(_controller->section().mediaType())
 , _onlyForwardable(_controller->key().globalMediaOnlyForwardable())
 , _slice(sliceKey(_aroundId)) {
+	_session->settings().restrictedGlobalSearchEnabledValue(
+	) | rpl::skip(1) | rpl::on_next([=] {
+		restart();
+	}, _lifetime);
 	_controller->session().data().itemRemoved(
 	) | rpl::on_next([this](auto item) {
 		itemRemoved(item);
@@ -130,6 +139,9 @@ Provider::Provider(not_null<AbstractController*> controller)
 }
 
 Provider::~Provider() {
+	if (_restrictedSearch) {
+		_restrictedSearch->cancel();
+	}
 	// _controller may be destroyed already, if the widget owning it was
 	// destroyed before its (QWidget-)child list widget owning this.
 	for (auto &entry : _totalLists) {
@@ -184,7 +196,7 @@ bool Provider::isPossiblyMyItem(not_null<const HistoryItem*> item) {
 
 std::optional<int> Provider::fullCount() {
 	return _sliceSnapshot
-		? std::make_optional(_sliceSnapshot->fullCount)
+		? _sliceSnapshot->exactTotal
 		: std::nullopt;
 }
 
@@ -196,6 +208,25 @@ void Provider::restart() {
 	_slice = GlobalMediaSlice(sliceKey(_aroundId));
 	_sliceSnapshot = std::nullopt;
 	_edgeRequest = std::nullopt;
+	_restrictedSearchPartial = false;
+	_restrictedSearchPending = false;
+	_restrictedSearchPagePending = false;
+	_restrictedSearchHasMore = true;
+	_restrictedSearchRetryAfter = 0;
+	if (_restrictedSearch) {
+		_restrictedSearch->cancel();
+	}
+	auto waiters = std::vector<Fn<void()>>();
+	for (auto &entry : _totalLists) {
+		auto pending = base::take(entry.second.requestWaiters);
+		waiters.insert(
+			waiters.end(),
+			std::make_move_iterator(begin(pending)),
+			std::make_move_iterator(end(pending)));
+	}
+	for (auto &callback : waiters) {
+		callback();
+	}
 	refreshViewer();
 }
 
@@ -217,6 +248,21 @@ void Provider::checkPreload(
 	const auto topLoaded = after && (*after == 0);
 	const auto before = _slice.skippedBefore();
 	const auto bottomLoaded = before && (*before == 0);
+	if (_restrictedSearch && _session->settings()
+		.restrictedGlobalSearchEnabled()) {
+		if (_restrictedSearchHasMore
+			&& _restrictedSearch->active()
+			&& Pagination::ShouldRequestOlderPage(
+				preloadTop,
+				preloadBottom,
+				_restrictedSearchHasMore,
+				_restrictedSearchPagePending)) {
+			_restrictedSearchPending = true;
+			_restrictedSearchPagePending = true;
+			_restrictedSearch->requestMore();
+		}
+		return;
+	}
 
 	const auto minScreenDelta = kPreloadedScreensCount
 		- Media::kPreloadIfLessThanScreens;
@@ -327,6 +373,23 @@ void Provider::requestMore(
 		uint64 generation,
 		Fn<void()> loaded) {
 	if (_generation != generation || _totalListQuery != query) {
+		return;
+	}
+	if (_restrictedSearch && _session->settings()
+		.restrictedGlobalSearchEnabled()) {
+		const auto list = listForQuery(query);
+		if (!_restrictedSearch->active() || !_restrictedSearchHasMore) {
+			loaded();
+		} else {
+			list->requestWaiters.push_back(std::move(loaded));
+		}
+		if (_restrictedSearch->active()
+			&& _restrictedSearchHasMore
+			&& !_restrictedSearchPagePending) {
+			_restrictedSearchPending = true;
+			_restrictedSearchPagePending = true;
+			_restrictedSearch->requestMore();
+		}
 		return;
 	}
 	const auto list = listForQuery(query);
@@ -444,6 +507,31 @@ std::optional<GlobalMediaSliceSnapshot> Provider::makeSnapshot(
 	const auto fullCount = update.slice.fullCount();
 	const auto skippedAfter = update.slice.skippedAfter();
 	const auto skippedBefore = update.slice.skippedBefore();
+	const auto restricted = _session->settings()
+		.restrictedGlobalSearchEnabled();
+	if (restricted) {
+		if (!skippedAfter || !skippedBefore) {
+			return std::nullopt;
+		}
+		const auto list = _totalLists.find(update.query);
+		if (list == end(_totalLists)) {
+			return std::nullopt;
+		}
+		return GlobalMediaSliceSnapshot{
+			.query = update.query,
+			.generation = update.generation,
+			.fullCount = fullCount.value_or(-1),
+			.skippedAfter = *skippedAfter,
+			.skippedBefore = *skippedBefore,
+			.fullyLoaded = list->second.loaded,
+			.exactTotal = fullCount,
+			.loadedCount = int(list->second.list.size()),
+			.hasMore = !list->second.loaded,
+			.partial = _restrictedSearchPartial,
+			.retryAfter = _restrictedSearchRetryAfter,
+			.positions = update.slice.items(),
+		};
+	}
 	if (!fullCount
 		|| !skippedAfter
 		|| !skippedBefore
@@ -489,6 +577,16 @@ void Provider::refreshViewer() {
 			return rpl::producer<SliceUpdate>();
 		}
 		_totalListQuery = query;
+		if (_controller->session().settings().restrictedGlobalSearchEnabled()) {
+			startRestrictedSearch(query, generation);
+			return rpl::producer<SliceUpdate>([=](auto consumer) {
+				auto lifetime = rpl::lifetime();
+				return lifetime;
+			});
+		}
+		if (_restrictedSearch) {
+			_restrictedSearch->cancel();
+		}
 		return source(
 			_type,
 			sliceKey(_aroundId).aroundId,
@@ -511,6 +609,132 @@ void Provider::refreshViewer() {
 	}, _viewerLifetime);
 }
 
+void Provider::startRestrictedSearch(
+		const QString &query,
+		uint64 generation) {
+	if (!_restrictedSearch) {
+		_restrictedSearch = std::make_unique<
+			Api::RestrictedGlobalSearchCoordinator>(_session);
+	}
+	_restrictedSearchFirstPage = true;
+	_restrictedSearchPending = true;
+	_restrictedSearchPagePending = true;
+	_restrictedSearchHasMore = true;
+	const auto flags = MTP_flags(
+		MTPmessages_SearchGlobal::Flag::f_folder_id);
+	const auto filter = Api::PrepareSearchFilter(_type);
+	const auto rawPageSize = 100;
+	const auto requestData = MTPmessages_SearchGlobal(
+		flags,
+		MTP_int(0),
+		MTPInputChannel(),
+		MTP_string(query),
+		filter,
+		MTP_int(0),
+		MTP_int(0),
+		MTP_int(0),
+		MTP_inputPeerEmpty(),
+		MTP_int(0),
+		MTP_int(rawPageSize));
+	auto search = Api::RestrictedGlobalSearchCoordinator::Query{
+		.request = requestData,
+		.flags = flags.v,
+		.folderId = 0,
+		.community = nullptr,
+		.text = query,
+		.filter = filter,
+		.minDate = 0,
+		.maxDate = 0,
+		.rawPageSize = rawPageSize,
+		.pageSize = 100,
+		.uniquePerPeer = false,
+		.onlyForwardable = _onlyForwardable,
+		.officialDelay = 0,
+		.supplementDelay = 0,
+	};
+	_restrictedSearch->start(
+		std::move(search),
+		[=](Api::RestrictedGlobalSearchCoordinator::Page page) {
+			restrictedSearchPage(query, generation, std::move(page));
+		});
+}
+
+void Provider::restrictedSearchPage(
+		QString query,
+		uint64 generation,
+		Api::RestrictedGlobalSearchCoordinator::Page page) {
+	if (_generation != generation || _totalListQuery != query) {
+		return;
+	}
+	_restrictedSearchPending = false;
+	_restrictedSearchPagePending = false;
+	_restrictedSearchHasMore = page.hasMore;
+	auto list = listForQuery(query);
+	for (const auto &position : page.messageIds) {
+		if (list->ids.emplace(position.fullId).second) {
+			_seenIds.emplace(position.fullId);
+			list->list.push_back(position);
+		}
+	}
+	ranges::sort(list->list, std::greater<>());
+	list->loaded = !page.hasMore;
+	list->fullCount = page.exactTotal.value_or(0);
+	_restrictedSearchPartial = page.coverage
+		== Api::RestrictedGlobalSearchCoordinator::Coverage::Partial;
+	_restrictedSearchRetryAfter = page.retryAfter;
+	if (_restrictedSearchFirstPage) {
+		list->list.clear();
+		list->ids.clear();
+		_seenIds.clear();
+		for (const auto &position : page.messageIds) {
+			if (list->ids.emplace(position.fullId).second) {
+				_seenIds.emplace(position.fullId);
+				list->list.push_back(position);
+			}
+		}
+		ranges::sort(list->list, std::greater<>());
+		_restrictedSearchFirstPage = false;
+	}
+	list->loaded = !page.hasMore;
+	list->fullCount = page.exactTotal.value_or(0);
+	const auto skipped = Pagination::MakeSkippedCounts(
+		0,
+		int(list->list.size()),
+		page.exactTotal,
+		page.hasMore);
+	const auto update = SliceUpdate{
+		.query = query,
+		.generation = generation,
+		.slice = GlobalMediaSlice(
+			sliceKey(Data::MaxMessagePosition),
+			list->list,
+			page.exactTotal,
+			skipped.after,
+			skipped.before),
+	};
+	_slice = update.slice;
+	_sliceSnapshot = GlobalMediaSliceSnapshot{
+		.query = query,
+		.generation = generation,
+		.fullCount = page.exactTotal.value_or(0),
+		.skippedAfter = skipped.after,
+		.skippedBefore = skipped.before,
+		.fullyLoaded = !page.hasMore,
+		.exactTotal = page.exactTotal,
+		.loadedCount = page.loadedCount,
+		.hasMore = page.hasMore,
+		.partial = _restrictedSearchPartial,
+		.retryAfter = page.retryAfter,
+		.positions = list->list,
+		.error = page.error,
+	};
+	_refreshed.fire({});
+	auto waiters = base::take(list->requestWaiters);
+	for (auto &callback : waiters) {
+		callback();
+	}
+}
+
 rpl::producer<> Provider::refreshed() {
 	return _refreshed.events();
 }
@@ -523,6 +747,40 @@ bool Provider::anchorWhileAtTop() {
 auto Provider::sliceSnapshot() const
 -> const std::optional<GlobalMediaSliceSnapshot> & {
 	return _sliceSnapshot;
+}
+
+bool Provider::restrictedSearchLoading() const {
+	return _restrictedSearchPending;
+}
+
+bool Provider::restrictedSearchRetryable() const {
+	return _restrictedSearchPartial && _restrictedSearch
+		&& !_restrictedSearchPending
+		&& !_restrictedSearchHasMore
+		&& !_restrictedSearch->cooldownLeft();
+}
+
+std::optional<int> Provider::restrictedSearchLoadedCount() const {
+	return _sliceSnapshot
+		? std::make_optional(_sliceSnapshot->loadedCount)
+		: std::nullopt;
+}
+
+crl::time Provider::restrictedSearchCooldown() const {
+	return _restrictedSearch
+		? _restrictedSearch->cooldownLeft()
+		: crl::time(0);
+}
+
+void Provider::retryRestrictedSearch() {
+	if (!restrictedSearchRetryable()) {
+		return;
+	}
+	_restrictedSearchFirstPage = true;
+	_restrictedSearchPending = true;
+	_restrictedSearchPagePending = true;
+	_restrictedSearchHasMore = true;
+	_restrictedSearch->retry();
 }
 
 std::vector<Media::ListSection> Provider::fillSections(

@@ -304,6 +304,26 @@ void BuildAutoDownloadSection(SectionBuilder &builder) {
 	builder.addSkip(st::settingsCheckboxesSkip);
 }
 
+void BuildRestrictedGlobalSearchSetting(SectionBuilder &builder) {
+	const auto session = builder.session();
+	builder.addDivider();
+	const auto enabled = builder.addCheckbox({
+		.id = u"advanced/restricted_global_search"_q,
+		.title = tr::lng_settings_restricted_global_search(),
+		.checked = session->settings().restrictedGlobalSearchEnabled(),
+		.keywords = { u"search"_q, u"global"_q, u"restricted"_q },
+	});
+	if (enabled) {
+		enabled->checkedChanges(
+		) | rpl::filter([=](bool checked) {
+			return checked != session->settings().restrictedGlobalSearchEnabled();
+		}) | rpl::on_next([=](bool checked) {
+			session->settings().setRestrictedGlobalSearchEnabled(checked);
+			session->saveSettingsDelayed();
+		}, enabled->lifetime());
+	}
+}
+
 void BuildWindowTitleSection(SectionBuilder &builder) {
 	const auto settings = &Core::App().settings();
 
@@ -1343,6 +1363,7 @@ const auto kMeta = BuildHelper({
 		BuildUpdateSection(builder, true);
 	}
 	BuildDataStorageSection(builder);
+	BuildRestrictedGlobalSearchSetting(builder);
 	BuildAutoDownloadSection(builder);
 	BuildWindowTitleSection(builder);
 #if !defined Q_OS_WIN && !defined Q_OS_MAC

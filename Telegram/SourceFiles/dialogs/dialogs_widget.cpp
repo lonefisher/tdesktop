@@ -6,6 +6,7 @@ For license and copyright information please follow this link:
 https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "dialogs/dialogs_widget.h"
+#include "ui/restricted_search_status.h"
 
 #include "base/call_delayed.h"
 #include "base/qt/qt_key_modifiers.h"
@@ -114,6 +115,7 @@ namespace {
 constexpr auto kSearchPerPage = 50;
 constexpr auto kStoriesExpandDuration = crl::time(200);
 constexpr auto kSearchRequestDelay = crl::time(900);
+constexpr auto kRestrictedSearchDelay = crl::time(350);
 
 base::options::toggle OptionForumHideChatsList({
 	.id = kOptionForumHideChatsList,
@@ -521,6 +523,35 @@ Widget::Widget(
 	) | rpl::on_next([=](SearchRequestDelay delay) {
 		searchRequested(delay);
 	}, lifetime());
+	_inner->restrictedSearchRetryRequests(
+	) | rpl::on_next([=] {
+		if (_restrictedGlobalSearch
+			&& !_restrictedSearchRetryPending
+			&& !_restrictedGlobalSearch->cooldownLeft()) {
+			_restrictedSearchRetryPending = true;
+			_restrictedSearchFirstPage = true;
+			_inner->restrictedSearchPendingStarted(
+				_restrictedSearchGeneration);
+			_restrictedGlobalSearch->retry();
+		}
+	}, lifetime());
+	session().settings().restrictedGlobalSearchEnabledValue(
+	) | rpl::skip(1) | rpl::on_next([=](bool enabled) {
+		_restrictedSearchRetryPending = false;
+		++_restrictedSearchGeneration;
+		_inner->restrictedSearchPendingCancelled(
+			_restrictedSearchGeneration);
+		if (_restrictedGlobalSearch) {
+			_restrictedGlobalSearch->cancel();
+		}
+		if (enabled) {
+			_searchQuery = QString();
+			searchRequested(SearchRequestDelay::Instant);
+		} else if (!_searchQuery.isEmpty()) {
+			_searchTimer.cancel();
+			requestMessages(true);
+		}
+	}, lifetime());
 	_inner->completeHashtagRequests(
 	) | rpl::on_next([=](const QString &tag) {
 		completeHashtag(tag);
@@ -715,7 +746,11 @@ Widget::Widget(
 	_inner->setLoadMoreCallback([=] {
 		const auto state = _inner->state();
 		const auto process = currentSearchProcess();
-		if (state == WidgetState::Filtered
+		if (_restrictedGlobalSearch
+			&& _restrictedGlobalSearch->active()
+			&& state == WidgetState::Filtered) {
+			_restrictedGlobalSearch->requestMore();
+		} else if (state == WidgetState::Filtered
 			&& (!process->full
 				|| (_searchInMigrated && !_migratedProcess.full))) {
 			searchMore();
@@ -3123,6 +3158,14 @@ bool Widget::search(bool inCache, SearchRequestDelay delay) {
 		: nullptr;
 	const auto filter = _searchState.filter;
 	const auto fromArchive = _searchState.fromArchive;
+	const auto restrictedGlobal = session().settings()
+		.restrictedGlobalSearchEnabled()
+		&& !inPeer
+		&& tab != ChatSearchTab::PublicPosts
+		&& (tab == ChatSearchTab::MyMessages
+			|| tab == ChatSearchTab::Archive
+			|| tab == ChatSearchTab::ThisCommunity);
+	inCache = inCache && !restrictedGlobal;
 	const auto fromStartType = SearchRequestType{
 		.start = true,
 		.peer = (inPeer != nullptr),
@@ -3195,6 +3238,9 @@ bool Widget::search(bool inCache, SearchRequestDelay delay) {
 		_migratedProcess.full = false;
 		cancelSearchRequest();
 		if (inPeer) {
+			if (_restrictedGlobalSearch) {
+				_restrictedGlobalSearch->cancel();
+			}
 			const auto topic = searchInTopic();
 			auto &histories = session().data().histories();
 			const auto type = Data::Histories::RequestType::History;
@@ -3252,8 +3298,23 @@ bool Widget::search(bool inCache, SearchRequestDelay delay) {
 				return process->requestId;
 			});
 		} else if (_searchState.tab == ChatSearchTab::PublicPosts) {
+			if (_restrictedGlobalSearch) {
+				_restrictedGlobalSearch->cancel();
+			}
 			requestPublicPosts(true);
+		} else if (restrictedGlobal) {
+			startRestrictedGlobalSearch(
+				delay == SearchRequestDelay::Instant
+					? crl::time(0)
+					: kSearchRequestDelay,
+				delay == SearchRequestDelay::Instant
+					? crl::time(0)
+					: kRestrictedSearchDelay);
+			result = true;
 		} else {
+			if (_restrictedGlobalSearch) {
+				_restrictedGlobalSearch->cancel();
+			}
 			requestMessages(true);
 		}
 		_inner->searchRequested(true);
@@ -3405,6 +3466,9 @@ void Widget::searchMore() {
 		|| _historiesRequest
 		|| _searchTimer.isActive()) {
 		return;
+	} else if (_restrictedGlobalSearch
+		&& _restrictedGlobalSearch->active()) {
+		_restrictedGlobalSearch->requestMore();
 	} else if (!process->full) {
 		if (const auto peer = searchInPeer()) {
 			auto &histories = session().data().histories();
@@ -3608,6 +3672,110 @@ void Widget::requestMessages(bool fromStart) {
 	if (fromStart && _searchWithPostsPreview) {
 		requestPublicPosts(true);
 	}
+}
+
+void Widget::startRestrictedGlobalSearch(
+		crl::time officialDelay,
+		crl::time supplementDelay) {
+	if (!_restrictedGlobalSearch) {
+		_restrictedGlobalSearch = std::make_unique<
+			Api::RestrictedGlobalSearchCoordinator>(&session());
+	}
+	const auto generation = ++_restrictedSearchGeneration;
+	_restrictedSearchFirstPage = true;
+	_restrictedSearchRetryPending = false;
+	_inner->restrictedSearchPendingStarted(generation);
+	using Flag = MTPmessages_SearchGlobal::Flag;
+	const auto community = (_searchQueryTab == ChatSearchTab::ThisCommunity)
+		? _searchQueryCommunity
+		: nullptr;
+	const auto restrictFolder = (_searchQueryTab == ChatSearchTab::Archive)
+		|| !_searchQueryFromArchive;
+	const auto flags = (community
+		? Flag::f_community
+		: restrictFolder
+		? Flag::f_folder_id
+		: Flag())
+		| (_searchQueryFilter == ChatTypeFilter::Private
+			? Flag::f_users_only
+			: _searchQueryFilter == ChatTypeFilter::Groups
+			? Flag::f_groups_only
+			: _searchQueryFilter == ChatTypeFilter::Channels
+			? Flag::f_broadcasts_only
+			: Flag());
+	const auto folderId = (_searchQueryTab == ChatSearchTab::Archive)
+		? Data::Folder::kId
+		: 0;
+	const auto filter = MTP_inputMessagesFilterEmpty();
+	const auto rawPageSize = kSearchPerPage;
+	auto query = Api::RestrictedGlobalSearchCoordinator::Query{
+		.request = MTPmessages_SearchGlobal(
+			MTP_flags(flags),
+			MTP_int(folderId),
+			(community ? community->inputChannel() : MTPInputChannel()),
+			MTP_string(_searchQuery),
+			filter,
+			MTP_int(0),
+			MTP_int(0),
+			MTP_int(0),
+			MTP_inputPeerEmpty(),
+			MTP_int(0),
+			MTP_int(rawPageSize)),
+		.flags = flags,
+		.folderId = folderId,
+		.community = community,
+		.text = _searchQuery,
+		.filter = filter,
+		.minDate = 0,
+		.maxDate = 0,
+		.rawPageSize = rawPageSize,
+		.pageSize = kSearchPerPage,
+		.uniquePerPeer = _inner->uniqueSearchResults(),
+		.officialDelay = officialDelay,
+		.supplementDelay = supplementDelay,
+	};
+	_restrictedGlobalSearch->start(
+		std::move(query),
+		[=](Api::RestrictedGlobalSearchCoordinator::Page page) {
+			if (generation != _restrictedSearchGeneration) {
+				return;
+			}
+			restrictedGlobalSearchPage(std::move(page));
+		});
+	if (_searchWithPostsPreview) {
+		base::call_delayed(officialDelay, this, [=] {
+			if (generation == _restrictedSearchGeneration
+				&& _searchWithPostsPreview) {
+				requestPublicPosts(true);
+			}
+		});
+	}
+}
+
+void Widget::restrictedGlobalSearchPage(
+		Api::RestrictedGlobalSearchCoordinator::Page page) {
+	const auto complete = (page.coverage
+		== Api::RestrictedGlobalSearchCoordinator::Coverage::Complete);
+	const auto status = complete
+		? QString()
+		: Ui::RestrictedSearchFailureText(page.error);
+	_inner->restrictedSearchPage(
+		_restrictedSearchGeneration,
+		page.messageIds,
+		page.loadedCount,
+		page.exactTotal,
+		page.hasMore,
+		_restrictedSearchFirstPage,
+		_inner->uniqueSearchResults(),
+		status);
+	if (!page.hasMore) {
+		_restrictedSearchRetryPending = false;
+	}
+	_restrictedSearchFirstPage = false;
+	_searchProcess.full = !page.hasMore;
+	_searchProcess.requestId = 0;
+	listScrollUpdated();
+	update();
 }
 
 auto Widget::currentSearchProcess() -> not_null<SearchProcessState*> {
@@ -4909,6 +5077,11 @@ void Widget::scrollToEntry(const RowDescriptor &entry) {
 }
 
 void Widget::cancelSearchRequest() {
+	if (_restrictedGlobalSearch) {
+		_restrictedGlobalSearch->cancel();
+	}
+	++_restrictedSearchGeneration;
+	_inner->restrictedSearchPendingCancelled(_restrictedSearchGeneration);
 	session().api().request(base::take(_searchProcess.requestId)).cancel();
 	session().api().request(base::take(_migratedProcess.requestId)).cancel();
 	session().api().request(base::take(_postsProcess.requestId)).cancel();

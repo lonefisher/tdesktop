@@ -551,6 +551,20 @@ public:
 	}
 	void setIsBlocked(bool is);
 
+	// Raw 'restricted' flag state of the peer as reported by an
+	// authoritative (non-minimal) user / channel payload. Minimal
+	// or non-authoritative payloads never touch this state, so a
+	// once-known value is preserved until the next full payload.
+	enum class RestrictedState : char {
+		Unknown,
+		Restricted,
+		Unrestricted,
+	};
+	[[nodiscard]] RestrictedState restrictedState() const {
+		return _restrictedState;
+	}
+	void setRestrictedState(RestrictedState state);
+
 	enum class LoadedStatus : char {
 		Not,
 		Minimal,
@@ -665,6 +679,7 @@ private:
 
 	BlockStatus _blockStatus = BlockStatus::Unknown;
 	LoadedStatus _loadedStatus = LoadedStatus::Not;
+	RestrictedState _restrictedState = RestrictedState::Unknown;
 	TranslationFlag _translationFlag = TranslationFlag::Unknown;
 	Data::ProfileTab _mainProfileTab = Data::ProfileTab::None;
 	uint8 _colorIndex : 6 = 0;

@@ -6,6 +6,7 @@ For license and copyright information please follow this link:
 https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "apiwrap.h"
+#include "api/restricted_search_pinned_state.h"
 
 #include "api/api_authorizations.h"
 #include "api/api_attached_stickers.h"
@@ -1129,7 +1130,8 @@ mtpRequestId ApiWrap::sendPinnedDialogsRequest(
 		Fn<void()> finish) {
 	return request(MTPmessages_GetPinnedDialogs(
 		MTP_int(folder ? folder->id() : 0)
-	)).done([=](const MTPmessages_PeerDialogs &result) {
+	 )).done([=](const MTPmessages_PeerDialogs &result) {
+        Api::RestrictedSearchPinnedDialogsResult(_session, folder ? folder->id() : 0, true);
 		finish();
 		result.match([&](const MTPDmessages_peerDialogs &data) {
 			_session->data().processUsers(data.vusers());
@@ -1143,6 +1145,7 @@ mtpRequestId ApiWrap::sendPinnedDialogsRequest(
 			_session->data().notifyPinnedDialogsOrderUpdated();
 		});
 	}).fail([=] {
+        Api::RestrictedSearchPinnedDialogsResult(_session, folder ? folder->id() : 0, false);
 		finish();
 	}).send();
 }

@@ -404,6 +404,40 @@ bool ListWidget::globalMediaSliceRefreshInProgress() const {
 	return _globalMediaSliceRefreshInProgress;
 }
 
+bool ListWidget::globalMediaRestrictedSearchLoading() const {
+	const auto provider = globalMediaProvider();
+	return provider && provider->restrictedSearchLoading();
+}
+
+auto ListWidget::globalMediaSearchSnapshotValue() const
+-> rpl::producer<std::optional<GlobalMedia::GlobalMediaSliceSnapshot>> {
+	const auto provider = globalMediaProvider();
+	return _globalMediaSearchSnapshotUpdates.events_starting_with_copy(
+		provider ? provider->sliceSnapshot()
+			: std::optional<GlobalMedia::GlobalMediaSliceSnapshot>());
+}
+
+bool ListWidget::globalMediaRestrictedSearchRetryable() const {
+	const auto provider = globalMediaProvider();
+	return provider && provider->restrictedSearchRetryable();
+}
+
+std::optional<int> ListWidget::globalMediaRestrictedSearchLoadedCount() const {
+	const auto provider = globalMediaProvider();
+	return provider ? provider->restrictedSearchLoadedCount() : std::nullopt;
+}
+
+crl::time ListWidget::globalMediaRestrictedSearchCooldown() const {
+	const auto provider = globalMediaProvider();
+	return provider ? provider->restrictedSearchCooldown() : crl::time(0);
+}
+
+void ListWidget::retryGlobalMediaRestrictedSearch() {
+	if (const auto provider = globalMediaProvider()) {
+		provider->retryRestrictedSearch();
+	}
+}
+
 void ListWidget::setGlobalMediaEmbeddedViewport() {
 	_globalMediaEmbeddedViewport = true;
 }
@@ -942,6 +976,10 @@ void ListWidget::refreshRows() {
 	_reorderState = {};
 	_sections.clear();
 	_sections = _provider->fillSections(this);
+	if (globalMedia) {
+		_globalMediaSearchSnapshotUpdates.fire_copy(
+			globalMedia->sliceSnapshot());
+	}
 
 	if (_controller->isDownloads() && !_sections.empty()) {
 		for (const auto &item : _sections.back().items()) {
