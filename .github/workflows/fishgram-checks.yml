@@ -1,0 +1,73 @@
+name: FishGram source checks
+on:
+  pull_request:
+  push:
+    branches: [custom/main, 'ci/**']
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: source-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  helpers:
+    name: Production helper tests
+    runs-on: windows-2022
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          path: source
+          persist-credentials: false
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: lonefisher/fishgram
+          ref: 496910e2254f49ce51369b61f740044e7715b068
+          path: product
+          persist-credentials: false
+      - name: Test actual production helpers
+        shell: pwsh
+        run: ./product/tools/test-restricted-search.ps1 -SourceRoot "$PWD/source" -OutputDirectory "$PWD/build-tests"
+  compile:
+    name: Source test identity compile
+    if: github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch'
+    runs-on: windows-2022
+    timeout-minutes: 350
+    steps:
+      - run: git config --global core.longpaths true
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: lonefisher/fishgram
+          ref: 496910e2254f49ce51369b61f740044e7715b068
+          path: product
+          persist-credentials: false
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          path: product/tdesktop
+          submodules: recursive
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.13'
+      - name: Bind this test-only input to the actual source commit
+        shell: pwsh
+        working-directory: product
+        run: |
+          $sha=git -C tdesktop rev-parse HEAD
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          git update-index --cacheinfo "160000,$sha,tdesktop"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $recipe=Get-Content -Raw fishgram.json | ConvertFrom-Json
+          $version=Get-Content -Raw tdesktop/Telegram/SourceFiles/core/version.h
+          if ($version -notmatch 'AppVersionStr\s*=\s*"(\d+\.\d+\.\d+)"') { throw 'Unknown source version' }
+          $recipe.upstreamVersion=$Matches[1]
+          $recipe.releaseReady=$false
+          $recipe | ConvertTo-Json -Depth 4 | Set-Content fishgram.json
+      - name: Prepare exact PR dependencies without credentials or cache writes
+        shell: pwsh
+        working-directory: product
+        run: ./tools/prepare-dependencies.ps1 -Silent
+      - name: Compile test identity, never upload client or raw logs
+        shell: pwsh
+        working-directory: product
+        run: ./tools/build-telegram.ps1 -TestIdentity -Parallel 4
