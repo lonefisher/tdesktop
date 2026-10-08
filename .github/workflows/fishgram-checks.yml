@@ -86,4 +86,3 @@ jobs:
           path: product/reports/*-diagnostics.json
           if-no-files-found: ignore
           retention-days: 7
-
