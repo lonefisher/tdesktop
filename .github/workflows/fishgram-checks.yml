@@ -22,7 +22,7 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           repository: lonefisher/fishgram
-          ref: 711c563dd0ee335d4789f674c6c7260028f7e434
+          ref: 26623a7454f50ad152675b66bcee97a7015a84de
           path: product
           persist-credentials: false
       - name: Test actual production helpers
@@ -42,7 +42,7 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           repository: lonefisher/fishgram
-          ref: 711c563dd0ee335d4789f674c6c7260028f7e434
+          ref: 26623a7454f50ad152675b66bcee97a7015a84de
           path: product
           persist-credentials: false
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
