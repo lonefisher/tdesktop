@@ -386,6 +386,27 @@ void TestRetainsCurrentAndTwoPriorVersions() {
 	assert(Read(fixture.install / L"Telegram.exe") == "version-7002009004");
 }
 
+void TestCommittedRecoveryAlsoTrimsProgramHistory() {
+	Fixture fixture(L"committed-retention-");
+	for (std::uint64_t version = 7002009001ULL; version <= 7002009004ULL; ++version) {
+		fixture.Payload(version, kStable, {
+			{L"Telegram.exe", "version-" + std::to_string(version)},
+			{L"Updater.exe", "updater-" + std::to_string(version)}});
+		auto request = fixture.RequestFor(version);
+		request.afterCommit = [] { throw 42; };
+		try { (void)Apply(request); assert(false); } catch (int code) { assert(code == 42); }
+		assert(RecoverPending(fixture.install.wstring()) == Result::Recovered);
+		std::size_t versions = 0;
+		for (const auto &entry : fs::directory_iterator(fixture.install / L".fishgram-update" / L"versions")) {
+			assert(entry.is_directory());
+			++versions;
+		}
+		assert(versions <= 2);
+		assert(Read(fixture.install / L"Telegram.exe") == "version-" + std::to_string(version));
+		assert(Read(fixture.work / L"tdata" / L"map0") == "working-account-secret");
+	}
+}
+
 int CrashChild(int argc, wchar_t **argv) {
 	assert(argc == 5);
 	Request request;
@@ -420,6 +441,7 @@ int wmain(int argc, wchar_t **argv) {
 	TestTrustedUpdateRunnerAndAuthorizationGate();
 	TestInstallLockSerializesSameDirectory();
 	TestRetainsCurrentAndTwoPriorVersions();
+	TestCommittedRecoveryAlsoTrimsProgramHistory();
 	std::cout << "Windows update transaction tests passed.\n";
 	return 0;
 }

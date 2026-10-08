@@ -10,6 +10,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "base/platform/win/base_windows_safe_library.h"
 #include "core/version.h"
 #include "_other/fishgram_update_transaction.h"
+#include "_other/fishgram_update_restart.h"
 #include "core/update_keys.h"
 #include "core/update_verify.h"
 #include "core/fishgram_update_payload.h"
@@ -228,6 +229,56 @@ bool update() {
 	return false;
 }
 
+bool launchUnelevated(const wstring &executable, const wstring &arguments) {
+	const auto shell = GetShellWindow();
+	DWORD shellPid = 0;
+	if (!shell || !GetWindowThreadProcessId(shell, &shellPid)) return false;
+	const auto process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, shellPid);
+	if (!process) return false;
+	HANDLE shellToken = nullptr, currentToken = nullptr, primary = nullptr;
+	bool okay = OpenProcessToken(process, TOKEN_QUERY | TOKEN_DUPLICATE, &shellToken)
+		&& OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &currentToken);
+	CloseHandle(process);
+	const auto readToken = [](HANDLE token, TOKEN_INFORMATION_CLASS kind) {
+		DWORD size = 0;
+		GetTokenInformation(token, kind, nullptr, 0, &size);
+		std::vector<unsigned char> bytes(size);
+		return size && GetTokenInformation(token, kind, bytes.data(), size, &size)
+			? bytes : std::vector<unsigned char>();
+	};
+	if (okay) {
+		const auto shellUser = readToken(shellToken, TokenUser);
+		const auto ownUser = readToken(currentToken, TokenUser);
+		const auto integrity = readToken(shellToken, TokenIntegrityLevel);
+		TOKEN_ELEVATION elevation = {};
+		DWORD length = 0;
+		okay = !shellUser.empty() && !ownUser.empty() && !integrity.empty()
+			&& EqualSid(reinterpret_cast<const TOKEN_USER*>(shellUser.data())->User.Sid,
+				reinterpret_cast<const TOKEN_USER*>(ownUser.data())->User.Sid)
+			&& GetTokenInformation(shellToken, TokenElevation, &elevation, sizeof(elevation), &length)
+			&& !elevation.TokenIsElevated;
+		if (okay) {
+			const auto sid = reinterpret_cast<const TOKEN_MANDATORY_LABEL*>(integrity.data())->Label.Sid;
+			const auto count = *GetSidSubAuthorityCount(sid);
+			okay = count && *GetSidSubAuthority(sid, count - 1) == SECURITY_MANDATORY_MEDIUM_RID;
+		}
+	}
+	if (okay) okay = DuplicateTokenEx(shellToken, MAXIMUM_ALLOWED, nullptr,
+		SecurityImpersonation, TokenPrimary, &primary);
+	if (currentToken) CloseHandle(currentToken);
+	if (shellToken) CloseHandle(shellToken);
+	if (!okay) return false;
+	wstring command = L"\"" + executable + L"\" " + arguments;
+	STARTUPINFOW startup = { sizeof(startup) };
+	startup.lpDesktop = const_cast<wchar_t*>(L"winsta0\\default");
+	PROCESS_INFORMATION child = {};
+	okay = CreateProcessWithTokenW(primary, LOGON_WITH_PROFILE, executable.c_str(),
+		command.data(), 0, nullptr, updateTo.c_str(), &startup, &child);
+	CloseHandle(primary);
+	if (okay) { CloseHandle(child.hThread); CloseHandle(child.hProcess); }
+	return okay;
+}
+
 int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE prevInstance, LPWSTR cmdParamarg, int cmdShow) {
 	base::Platform::InitDynamicLibraries();
 
@@ -367,55 +418,17 @@ int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE prevInstance, LPWSTR cmdPara
 	}
 	writeLog(L"Result arguments: " + targs);
 
-	bool executed = false;
-	if (writeprotected) { // run un-elevated
-		writeLog(L"Trying to run un-elevated by temp.lnk");
-
-		HRESULT hres = CoInitialize(0);
-		if (SUCCEEDED(hres)) {
-			IShellLink* psl;
-			HRESULT hres = CoCreateInstance(CLSID_ShellLink, NULL, CLSCTX_INPROC_SERVER, IID_IShellLink, (LPVOID*)&psl);
-			if (SUCCEEDED(hres)) {
-				IPersistFile* ppf;
-
-				wstring exe = FishGramTransaction::Details::Join(updateTo, exeName), dir = updateTo;
-				psl->SetArguments((targs.size() ? targs.substr(1) : targs).c_str());
-				psl->SetPath(exe.c_str());
-				psl->SetWorkingDirectory(dir.c_str());
-				psl->SetDescription(L"");
-
-				hres = psl->QueryInterface(IID_IPersistFile, (LPVOID*)&ppf);
-
-				if (SUCCEEDED(hres)) {
-					wstring lnk = L"tupdates\\temp\\temp.lnk";
-					hres = ppf->Save(lnk.c_str(), TRUE);
-					if (!SUCCEEDED(hres)) {
-						lnk = L"tupdates\\ready\\temp.lnk"; // old
-						hres = ppf->Save(lnk.c_str(), TRUE);
-					}
-					ppf->Release();
-
-					if (SUCCEEDED(hres)) {
-						writeLog(L"Executing un-elevated through link..");
-						ShellExecute(0, 0, L"explorer.exe", lnk.c_str(), 0, SW_SHOWNORMAL);
-						executed = true;
-					} else {
-						writeLog(L"Error: ppf->Save failed");
-					}
-				} else {
-					writeLog(L"Error: Could not create interface IID_IPersistFile");
-				}
-				psl->Release();
-			} else {
-				writeLog(L"Error: could not create instance of IID_IShellLink");
-			}
-			CoUninitialize();
-		} else {
-			writeLog(L"Error: Could not initialize COM");
-		}
-	}
+	const auto executed = Core::FishGramUpdates::RestartUpdatedClient(
+		writeprotected, Core::FishGramUpdates::IsCurrentProcessElevated(),
+		[&] { return launchUnelevated(FishGramTransaction::Details::Join(updateTo, exeName), L"-noupdate" + targs); },
+		[&] {
+			return reinterpret_cast<INT_PTR>(ShellExecuteW(0, 0,
+				FishGramTransaction::Details::Join(updateTo, exeName).c_str(),
+				(L"-noupdate" + targs).c_str(), 0, SW_SHOWNORMAL)) > 32;
+		});
 	if (!executed) {
-		ShellExecute(0, 0, (FishGramTransaction::Details::Join(updateTo, exeName)).c_str(), (L"-noupdate" + targs).c_str(), 0, SW_SHOWNORMAL);
+		updateError(L"The updater could not restart FishGram as a normal user. Close this updater and start FishGram from your normal desktop.", ERROR_ELEVATION_REQUIRED);
+		closeLog(); return 1;
 	}
 
 	writeLog(L"Executed '" + exeName + L"', closing log and quitting..");

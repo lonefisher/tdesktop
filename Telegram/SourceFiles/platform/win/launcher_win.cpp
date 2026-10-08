@@ -138,12 +138,16 @@ std::optional<int> Launcher::recoverUpdateHook() {
 			L"FishGram update recovery", MB_OK | MB_ICONERROR);
 		return 1;
 	}
-	const auto arguments = QStringList{
+	auto arguments = QStringList{
 		u"-recover"_q,
 		u"-installpath"_q, '"' + cExeDir() + '"',
 		u"-workdir"_q, '"' + cWorkingDir() + '"',
 		u"-waitpid"_q, QString::number(qulonglong(GetCurrentProcessId())),
 	};
+	if (recovery.requiresElevation) {
+		arguments.push_back(u"-writeprotected"_q);
+		arguments.push_back('"' + cExeDir() + '"');
+	}
 	return launch(recovery.requiresElevation ? u"runas"_q : QString(),
 		QString::fromStdWString(recovery.updaterPath), arguments) ? 0 : 1;
 }

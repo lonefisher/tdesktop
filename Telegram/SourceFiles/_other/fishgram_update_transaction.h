@@ -946,7 +946,10 @@ inline void AppendText(
 	Journal journal;
 	if (!LoadJournalNames(journalPath, &journal)) return Result::RecoveryFailed;
 	if (journal.state == 2) {
-		return RemoveTree(pending) ? Result::Recovered : Result::RecoveryFailed;
+		// A process can stop after the durable commit but before normal cleanup.
+		// Keep the new program and apply the same retention policy on recovery.
+		return TrimVersions(versions) && RemoveTree(pending)
+			? Result::Recovered : Result::RecoveryFailed;
 	}
 	return Rollback(meta, pending, versions, journal, request);
 }
