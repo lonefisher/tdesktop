@@ -20,6 +20,8 @@ class Session;
 namespace Api {
 class RestrictedGlobalSearchCoordinator final {
 public:
+	// Session/MTP adapters delegate lifecycle and paging to RestrictedSearchCore.
+	// Its deterministic transport tests run the same production coordinator core.
 	struct Query {
 		MTPmessages_SearchGlobal request;
 		MTPmessages_SearchGlobal::Flags flags;

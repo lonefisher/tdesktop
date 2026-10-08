@@ -11,14 +11,15 @@ namespace Core::FishGramUpdates {
 
 std::optional<Feed> ParseFeed(
 		const QByteArray &json,
-		const QString &channel,
+		const QString &indexChannel,
 		quint64 running,
 		QString *error) {
 	const auto fail = [&](const char *reason) -> std::optional<Feed> {
 		if (error) *error = QString::fromLatin1(reason);
 		return std::nullopt;
 	};
-	if (json.size() > 1024 * 1024 || (channel != "stable" && channel != "beta")) {
+	if (json.size() > 1024 * 1024
+		|| (indexChannel != "stable" && indexChannel != "beta")) {
 		return fail("Invalid update channel or oversized index.");
 	}
 	QJsonParseError parsed;
@@ -28,7 +29,7 @@ std::optional<Feed> ParseFeed(
 	}
 	const auto root = document.object();
 	if (root.value("schema") != QJsonValue(1)
-		|| root.value("channel") != channel
+		|| root.value("channel") != indexChannel
 		|| root.value("platform") != "windows-x64"
 		|| !root.contains("update")) {
 		return fail("Update index schema, channel or platform mismatch.");
@@ -36,6 +37,18 @@ std::optional<Feed> ParseFeed(
 	if (root.value("update").isNull()) return Feed{};
 	if (!root.value("update").isObject()) return fail("Invalid update entry.");
 	const auto entry = root.value("update").toObject();
+	// Older indexes implicitly put packages on their own index channel. New
+	// beta indexes may carry a stable package to let beta users migrate when
+	// their beta setting is turned off, so take an explicit package channel
+	// when present and preserve the old interpretation otherwise.
+	const auto packageChannelValue = entry.value("channel");
+	const auto packageChannel = packageChannelValue.isUndefined()
+		? indexChannel
+		: packageChannelValue.toString();
+	if ((packageChannel != "stable" && packageChannel != "beta")
+		|| (indexChannel == "stable" && packageChannel != "stable")) {
+		return fail("Update package channel is not allowed in this index.");
+	}
 	const auto decimal = [&](const char *field) -> std::optional<std::uint64_t> {
 		const auto value = entry.value(QLatin1String(field));
 		if (!value.isString()) return std::nullopt;
@@ -57,7 +70,7 @@ std::optional<Feed> ParseFeed(
 	const auto url = QUrl(link.toString(), QUrl::StrictMode);
 	const auto expected = QString("fishgram-update-win-x64-%1-r%2%3")
 		.arg(*version >> 32).arg(quint32(*version))
-		.arg(channel == "beta" ? "-beta" : "");
+		.arg(packageChannel == "beta" ? "-beta" : "");
 	const auto path = url.path(QUrl::FullyEncoded);
 	const auto prefix = QString("/lonefisher/fishgram/releases/download/");
 	const auto suffix = path.mid(prefix.size()).split('/');
@@ -70,7 +83,7 @@ std::optional<Feed> ParseFeed(
 		return fail("Update URL is not a FishGram release package.");
 	}
 	if (*version <= running) return Feed{};
-	return Feed{ Candidate{ *version, *size, channel, url.toString(), hash.toString().toLatin1() } };
+	return Feed{ Candidate{ *version, *size, packageChannel, url.toString(), hash.toString().toLatin1() } };
 }
 
 bool MatchesDownload(const Candidate &candidate, const QByteArray &bytes) {

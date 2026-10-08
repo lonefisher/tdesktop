@@ -384,7 +384,6 @@ void start() {
 
 	QDir().mkpath(cWorkingDir() + u"tdata"_q);
 
-	launcher.workingFolderReady();
 	CrashReports::StartCatching();
 
 	if (!LogsData->openMain()) {

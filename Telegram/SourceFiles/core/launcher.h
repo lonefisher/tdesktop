@@ -66,6 +66,9 @@ private:
 	void init();
 	virtual void initHook() {
 	}
+	virtual bool acquireClientSessionHook() {
+		return true;
+	}
 	virtual std::optional<int> recoverUpdateHook() {
 		return std::nullopt;
 	}

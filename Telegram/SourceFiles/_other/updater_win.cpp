@@ -14,6 +14,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "core/update_keys.h"
 #include "core/update_verify.h"
 #include "core/fishgram_update_payload.h"
+#include "core/fishgram_data_snapshot.h"
 #include <QtCore/QFile>
 #include <QtCore/QDateTime>
 
@@ -131,7 +132,7 @@ const WCHAR *updateResultMessage(FishGramTransaction::Result result) {
 	case FishGramTransaction::Result::InsufficientSpace:
 		return L"There is not enough free space to install this update.";
 	case FishGramTransaction::Result::WriteDenied:
-		return L"The installation folder is not writable.";
+		return L"The installation or update files failed permission and safety checks. Use a private writable installation folder.";
 	case FishGramTransaction::Result::FileInUse:
 		return L"An installed program file is in use.";
 	case FishGramTransaction::Result::CopyFailed:
@@ -140,6 +141,8 @@ const WCHAR *updateResultMessage(FishGramTransaction::Result result) {
 		return L"The previous program could not be fully restored. Use the recovery backup before restarting FishGram.";
 	case FishGramTransaction::Result::IoError:
 		return L"The update transaction could not be saved.";
+	case FishGramTransaction::Result::DataSnapshotFailed:
+		return L"The account-data snapshot could not be verified. FishGram kept the previous program and account data. Close all instances and retry.";
 	case FishGramTransaction::Result::Applied:
 	case FishGramTransaction::Result::NoUpdate:
 	case FishGramTransaction::Result::Recovered:
@@ -203,6 +206,14 @@ bool update() {
 	}
 	request.runningVersion = payload->version;
 	request.signedChannel = std::uint32_t(payload->channel);
+	if ((payload->version >> 32) != (running >> 32)) {
+		request.beforeProgramReplace = [&] {
+			return Core::FishGramUpdates::SnapshotBeforeBaselineUpdate(
+				QString::fromStdWString(workDir),
+				QString::fromStdWString(FishGramTransaction::Details::Join(updateTo, L"Telegram.exe")),
+				running);
+		};
+	}
 	request.authorize = [&] {
 		// Re-read the installation's newest root-signed authorization under the
 		// same install lock used by the client when persisting a newer manifest.

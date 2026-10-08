@@ -124,6 +124,21 @@ void Launcher::initHook() {
 	}
 }
 
+bool Launcher::acquireClientSessionHook() {
+	const auto result = Core::FishGramClientGate::TryAcquire(
+		QDir::toNativeSeparators(cExeDir()).toStdWString(),
+		false,
+		&_clientSessionLease);
+	if (result != Core::FishGramClientGate::AcquireResult::Acquired) {
+		MessageBoxW(nullptr,
+			L"FishGram cannot safely open account data because this installation "
+			L"is updating, already in use by an updater, or its private session lock is unavailable.",
+			L"FishGram startup blocked", MB_OK | MB_ICONERROR);
+		return false;
+	}
+	return true;
+}
+
 std::optional<int> Launcher::recoverUpdateHook() {
 	namespace Transaction = Core::FishGramUpdates::WindowsTransaction;
 	const auto recovery = Transaction::InspectStartupRecovery(
@@ -202,7 +217,7 @@ bool Launcher::launchUpdater(UpdaterLaunch action) {
 	if (cStartInTray()) {
 		pushArgument(u"-startintray"_q);
 	}
-	if (customWorkingDir()) {
+	if (customWorkingDir() || action == UpdaterLaunch::PerformUpdate) {
 		pushArgument(u"-workdir"_q);
 		pushArgument('"' + cWorkingDir() + '"');
 	}

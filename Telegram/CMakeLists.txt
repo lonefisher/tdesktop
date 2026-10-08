@@ -132,6 +132,7 @@ PRIVATE
 
     api/api_restricted_global_search.cpp
     api/api_restricted_global_search.h
+    api/restricted_search_core.h
     api/restricted_search_merge.h
     api/restricted_search_schedule.h
     api/api_attached_stickers.cpp
@@ -2559,6 +2560,8 @@ if (NOT DESKTOP_APP_DISABLE_AUTOUPDATE AND NOT build_macstore AND NOT build_wins
     nice_target_sources(Updater ${src_loc}
     PRIVATE
         _other/updater_win.cpp
+        core/fishgram_data_snapshot.cpp
+        core/fishgram_data_snapshot.h
         _other/updater_linux.cpp
         _other/updater_osx.m
         _other/updater.h

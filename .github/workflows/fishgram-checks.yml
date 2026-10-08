@@ -22,13 +22,14 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           repository: lonefisher/fishgram
-          ref: aaff63ed3b7a1339b3a9b0f12740d2468f67a7e8
+          ref: 711c563dd0ee335d4789f674c6c7260028f7e434
           path: product
           persist-credentials: false
       - name: Test actual production helpers
         shell: pwsh
         run: |
           ./product/tools/test-restricted-search.ps1 -SourceRoot "$PWD/source" -OutputDirectory "$PWD/build-tests"
+          ./product/tools/test-restricted-search-integration.ps1 -SourceRoot "$PWD/source" -OutputDirectory "$PWD/build-search-integration-tests"
           ./product/tools/test-update-policy.ps1 -SourceRoot "$PWD/source"
           ./product/tools/test-update-transaction.ps1 -SourceRoot "$PWD/source"
   compile:
@@ -41,7 +42,7 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           repository: lonefisher/fishgram
-          ref: aaff63ed3b7a1339b3a9b0f12740d2468f67a7e8
+          ref: 711c563dd0ee335d4789f674c6c7260028f7e434
           path: product
           persist-credentials: false
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262

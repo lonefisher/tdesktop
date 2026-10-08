@@ -1,9 +1,12 @@
 #pragma once
 
 #include "core/fishgram_update_policy.h"
+#include "core/fishgram_client_gate_win.h"
 
 #include <Windows.h>
 #include <TlHelp32.h>
+#include <Aclapi.h>
+#undef small
 
 #include <cstdint>
 #include <cstring>
@@ -38,6 +41,7 @@ enum class Result {
 	Recovered,
 	NoRecoveryNeeded,
 	IoError,
+	DataSnapshotFailed,
 };
 
 struct AuthenticatedFile final {
@@ -60,6 +64,7 @@ struct Request final {
 	std::function<void()> onLockAcquired;
 	std::function<void(std::size_t)> afterReplace;
 	std::function<void()> afterCommit;
+	std::function<bool()> beforeProgramReplace;
 };
 
 struct StartupRecovery final {
@@ -113,6 +118,11 @@ struct InstallLock final {
 	~InstallLock() {
 		if (handle != INVALID_HANDLE_VALUE) CloseHandle(handle);
 	}
+};
+
+struct DirectoryGuard final {
+	std::vector<HANDLE> handles;
+	~DirectoryGuard() { for (const auto handle : handles) CloseHandle(handle); }
 };
 
 [[nodiscard]] inline std::wstring Join(
@@ -175,6 +185,133 @@ struct InstallLock final {
 [[nodiscard]] inline bool EnsureDirectory(const std::wstring &path) {
 	if (CreateDirectoryW(path.c_str(), nullptr)) return true;
 	return GetLastError() == ERROR_ALREADY_EXISTS && IsSafeDirectory(path);
+}
+
+[[nodiscard]] inline bool HoldDirectoryPath(const std::wstring &path, DirectoryGuard *guard) {
+	// Deny write/delete sharing on every path component during filesystem writes.
+	// A caller cannot swap an ancestor or retarget it as a reparse point after
+	// CanonicalDirectory's initial check and before the transaction uses it.
+	for (auto end = std::size_t(3); end <= path.size(); ++end) {
+		if (end != path.size() && path[end] != L'\\') continue;
+		const auto part = path.substr(0, end);
+		const auto handle = CreateFileW(part.c_str(), FILE_READ_ATTRIBUTES | READ_CONTROL,
+			FILE_SHARE_READ, nullptr, OPEN_EXISTING,
+			FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
+		if (handle == INVALID_HANDLE_VALUE) return false;
+		guard->handles.push_back(handle);
+		BY_HANDLE_FILE_INFORMATION info = {};
+		if (!GetFileInformationByHandle(handle, &info)
+			|| !(info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
+			|| (info.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT)) return false;
+	}
+	return true;
+}
+
+// The journal, retained updater and trust record can authorize recovery writes.
+// Keep their filesystem trust boundary at the current user, SYSTEM and admins.
+struct TrustedPrincipals final {
+	std::vector<unsigned char> user;
+	unsigned char system[SECURITY_MAX_SID_SIZE] = {};
+	unsigned char admins[SECURITY_MAX_SID_SIZE] = {};
+	bool valid = false;
+	bool elevated = false;
+	TrustedPrincipals() {
+		HANDLE token = nullptr;
+		if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token)) return;
+		DWORD size = 0;
+		GetTokenInformation(token, TokenUser, nullptr, 0, &size);
+		user.resize(size);
+		TOKEN_ELEVATION elevation = {};
+		DWORD elevationSize = 0;
+		const auto okay = size && GetTokenInformation(token, TokenUser, user.data(), size, &size)
+			&& GetTokenInformation(token, TokenElevation, &elevation, sizeof(elevation), &elevationSize);
+		elevated = elevation.TokenIsElevated != 0;
+		CloseHandle(token);
+		DWORD systemSize = sizeof(system), adminSize = sizeof(admins);
+		valid = okay && CreateWellKnownSid(WinLocalSystemSid, nullptr, system, &systemSize)
+			&& CreateWellKnownSid(WinBuiltinAdministratorsSid, nullptr, admins, &adminSize);
+	}
+	[[nodiscard]] PSID UserSid() const { return reinterpret_cast<const TOKEN_USER*>(user.data())->User.Sid; }
+	[[nodiscard]] bool Contains(PSID sid) const {
+		return valid && sid && IsValidSid(sid)
+			&& ((!elevated && EqualSid(sid, UserSid())) || EqualSid(sid, const_cast<unsigned char*>(system))
+				|| EqualSid(sid, const_cast<unsigned char*>(admins)));
+	}
+};
+
+[[nodiscard]] inline bool HasTrustedPermissions(const std::wstring &path) {
+	TrustedPrincipals trusted;
+	if (!trusted.valid) return false;
+	PSID owner = nullptr;
+	PACL dacl = nullptr;
+	PSECURITY_DESCRIPTOR descriptor = nullptr;
+	if (GetNamedSecurityInfoW(path.c_str(), SE_FILE_OBJECT,
+		OWNER_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION, &owner, nullptr,
+		&dacl, nullptr, &descriptor) != ERROR_SUCCESS) return false;
+	bool okay = trusted.Contains(owner) && dacl && IsValidAcl(dacl);
+	constexpr auto writes = FILE_WRITE_DATA | FILE_APPEND_DATA | FILE_WRITE_EA
+		| FILE_WRITE_ATTRIBUTES | FILE_DELETE_CHILD | DELETE | WRITE_DAC | WRITE_OWNER
+		| GENERIC_WRITE | GENERIC_ALL | MAXIMUM_ALLOWED;
+	for (DWORD i = 0; okay && i < dacl->AceCount; ++i) {
+		void *raw = nullptr;
+		if (!GetAce(dacl, i, &raw)) { okay = false; break; }
+		const auto header = static_cast<const ACE_HEADER*>(raw);
+		if (header->AceFlags & INHERIT_ONLY_ACE) continue;
+		if (header->AceType == ACCESS_DENIED_ACE_TYPE) continue;
+		if (header->AceType != ACCESS_ALLOWED_ACE_TYPE) { okay = false; break; }
+		const auto ace = static_cast<const ACCESS_ALLOWED_ACE*>(raw);
+		if ((ace->Mask & writes) && !trusted.Contains(const_cast<DWORD*>(&ace->SidStart))) okay = false;
+	}
+	LocalFree(descriptor);
+	return okay;
+}
+
+[[nodiscard]] inline bool EnsurePrivateDirectory(const std::wstring &path) {
+	if (!IsAbsent(path)) return IsSafeDirectory(path) && HasTrustedPermissions(path);
+	TrustedPrincipals trusted;
+	if (!trusted.valid) return false;
+	EXPLICIT_ACCESSW access[3] = {};
+	PSID principals[] = {trusted.UserSid(), trusted.system, trusted.admins};
+	for (auto i = 0; i != 3; ++i) {
+		access[i].grfAccessPermissions = i == 0 && trusted.elevated
+			? FILE_GENERIC_READ | FILE_GENERIC_EXECUTE : FILE_ALL_ACCESS;
+		access[i].grfAccessMode = SET_ACCESS;
+		access[i].grfInheritance = SUB_CONTAINERS_AND_OBJECTS_INHERIT;
+		access[i].Trustee.TrusteeForm = TRUSTEE_IS_SID;
+		access[i].Trustee.ptstrName = static_cast<LPWSTR>(principals[i]);
+	}
+	PACL dacl = nullptr;
+	if (SetEntriesInAclW(3, access, nullptr, &dacl) != ERROR_SUCCESS) return false;
+	SECURITY_DESCRIPTOR descriptor = {};
+	const auto ready = InitializeSecurityDescriptor(&descriptor, SECURITY_DESCRIPTOR_REVISION)
+		&& SetSecurityDescriptorDacl(&descriptor, TRUE, dacl, FALSE)
+		&& SetSecurityDescriptorControl(&descriptor, SE_DACL_PROTECTED, SE_DACL_PROTECTED);
+	SECURITY_ATTRIBUTES attributes = {sizeof(SECURITY_ATTRIBUTES), &descriptor, FALSE};
+	const auto created = ready && CreateDirectoryW(path.c_str(), &attributes);
+	const auto error = GetLastError();
+	LocalFree(dacl);
+	return (created || error == ERROR_ALREADY_EXISTS)
+		&& IsSafeDirectory(path) && HasTrustedPermissions(path);
+}
+
+[[nodiscard]] inline bool TrustedMetadataTree(const std::wstring &path, unsigned depth = 0) {
+	if (depth > 8 || !IsSafeDirectory(path) || !HasTrustedPermissions(path)) return false;
+	WIN32_FIND_DATAW data = {};
+	const auto find = FindFirstFileW(Join(path, L"*").c_str(), &data);
+	if (find == INVALID_HANDLE_VALUE) return GetLastError() == ERROR_FILE_NOT_FOUND;
+	bool okay = true;
+	do {
+		const auto name = std::wstring(data.cFileName);
+		if (name == L"." || name == L"..") continue;
+		const auto child = Join(path, name);
+		if ((data.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT)
+			|| !HasTrustedPermissions(child)
+			|| ((data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
+				&& !TrustedMetadataTree(child, depth + 1))) { okay = false; break; }
+	} while (FindNextFileW(find, &data));
+	const auto error = GetLastError();
+	FindClose(find);
+	return okay && error == ERROR_NO_MORE_FILES;
 }
 
 [[nodiscard]] inline bool IsAsciiSafeName(
@@ -860,13 +997,31 @@ inline void AppendText(
 	return true;
 }
 
+[[nodiscard]] inline bool TrustedProgramBoundary(const std::wstring &installDir) {
+	if (!HasTrustedPermissions(installDir)) return false;
+	// A private directory does not make an explicitly shared executable safe.
+	WIN32_FIND_DATAW data = {};
+	const auto find = FindFirstFileW(Join(installDir, L"*").c_str(), &data);
+	if (find == INVALID_HANDLE_VALUE) return false;
+	bool trusted = true;
+	do {
+		const auto name = std::wstring(data.cFileName);
+		if (data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) continue;
+		if (IsAsciiSafeName(name) && !HasTrustedPermissions(Join(installDir, name))) { trusted = false; break; }
+	} while (FindNextFileW(find, &data));
+	const auto error = GetLastError();
+	FindClose(find);
+	return trusted && error == ERROR_NO_MORE_FILES;
+}
+
 [[nodiscard]] inline bool PrepareMetadata(
 		const std::wstring &installDir,
 		std::wstring *meta,
 		std::wstring *versions) {
 	*meta = Join(installDir, L".fishgram-update");
 	*versions = Join(*meta, L"versions");
-	return EnsureDirectory(*meta) && EnsureDirectory(*versions);
+	return TrustedProgramBoundary(installDir) && EnsurePrivateDirectory(*meta)
+		&& EnsurePrivateDirectory(*versions) && TrustedMetadataTree(*meta);
 }
 
 [[nodiscard]] inline bool LoadJournalNames(
@@ -1007,6 +1162,10 @@ inline void AppendText(
 	if (!Preflight(request, installDir, payload, &originalNames, &backupSize, &failure)) {
 		return failure;
 	}
+	// Production uses this hook for a cross-baseline account snapshot. It runs
+	// under the install lock after process/space/write checks and before replacing
+	// any program byte or creating a pending installation transaction.
+	if (request.beforeProgramReplace && !request.beforeProgramReplace()) return Result::DataSnapshotFailed;
 	// Keep a trusted pre-update recovery executable outside pending and tupdates.
 	// It must survive both ready cleanup and rollback while it is running.
 	const auto recovery = Join(meta, L"recovery");
@@ -1126,6 +1285,9 @@ inline void AppendText(
 			Join(workDir, L"tupdates"))) {
 		return Result::InvalidWorkPath;
 	}
+	DirectoryGuard installGuard, workGuard;
+	if (!HoldDirectoryPath(installDir, &installGuard)
+		|| !HoldDirectoryPath(workDir, &workGuard)) return Result::WriteDenied;
 	if (!SameName(request.executableName, L"Telegram.exe")
 		|| !IsAsciiSafeName(request.executableName)
 		|| !request.runningVersion) {
@@ -1137,6 +1299,10 @@ inline void AppendText(
 	InstallLock lock;
 	Result failure = Result::IoError;
 	if (!AcquireLock(meta, &lock, &failure)) return failure;
+	Core::FishGramClientGate::Lease clientGate;
+	const auto gate = Core::FishGramClientGate::TryAcquire(installDir, true, &clientGate);
+	if (gate == Core::FishGramClientGate::AcquireResult::Busy) return Result::Busy;
+	if (gate != Core::FishGramClientGate::AcquireResult::Acquired) return Result::WriteDenied;
 	if (request.onLockAcquired) request.onLockAcquired();
 	if (request.processRunning
 		? request.processRunning(Join(installDir, request.executableName))
@@ -1188,12 +1354,18 @@ inline void AppendText(
 	using namespace Details;
 	std::wstring installDir;
 	if (!CanonicalDirectory(inputInstallDir, &installDir)) return Result::InvalidInstallPath;
+	DirectoryGuard guard;
+	if (!HoldDirectoryPath(installDir, &guard)) return Result::WriteDenied;
 	std::wstring meta;
 	std::wstring versions;
 	if (!PrepareMetadata(installDir, &meta, &versions)) return Result::WriteDenied;
 	InstallLock lock;
 	Result failure = Result::IoError;
 	if (!AcquireLock(meta, &lock, &failure)) return failure;
+	Core::FishGramClientGate::Lease clientGate;
+	const auto gate = Core::FishGramClientGate::TryAcquire(installDir, true, &clientGate);
+	if (gate == Core::FishGramClientGate::AcquireResult::Busy) return Result::Busy;
+	if (gate != Core::FishGramClientGate::AcquireResult::Acquired) return Result::WriteDenied;
 	if (TargetProcessRunning(Join(installDir, L"Telegram.exe"))) return Result::AppRunning;
 	return RecoverLocked(meta, versions, nullptr);
 }
@@ -1207,6 +1379,10 @@ inline void AppendText(
 	if (IsAbsent(meta)) return {};
 	const auto pending = Join(meta, L"pending");
 	if (!IsSafeDirectory(meta)) return { StartupRecovery::State::Blocked, {} };
+	if (IsAbsent(pending)) return {};
+	DirectoryGuard guard;
+	if (!HoldDirectoryPath(installDir, &guard) || !TrustedProgramBoundary(installDir)
+		|| !TrustedMetadataTree(meta)) return { StartupRecovery::State::Blocked, {} };
 	InstallLock lock;
 	Result failure = Result::IoError;
 	const auto locked = AcquireLock(meta, &lock, &failure);
@@ -1233,8 +1409,9 @@ inline void AppendText(
 		const std::wstring &inputInstallDir, std::wstring *updaterPath) {
 	using namespace Details;
 	std::wstring installDir, meta, versions;
-	if (!CanonicalDirectory(inputInstallDir, &installDir)
-		|| !PrepareMetadata(installDir, &meta, &versions)) return false;
+	if (!CanonicalDirectory(inputInstallDir, &installDir)) return false;
+	DirectoryGuard guard;
+	if (!HoldDirectoryPath(installDir, &guard) || !PrepareMetadata(installDir, &meta, &versions)) return false;
 	InstallLock lock;
 	Result failure = Result::IoError;
 	if (!AcquireLock(meta, &lock, &failure) || !IsAbsent(Join(meta, L"pending"))) return false;

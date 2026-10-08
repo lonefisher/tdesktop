@@ -19,6 +19,10 @@ endif()
 file(STRINGS "${CMAKE_CURRENT_SOURCE_DIR}/Telegram/build/version" fishgram_version_line REGEX "^AppVersion ")
 string(REGEX REPLACE "^AppVersion[ \t]+" "" fishgram_base_version "${fishgram_version_line}")
 add_compile_definitions(FISHGRAM_REVISION=${FISHGRAM_REVISION} FISHGRAM_BASE_VERSION=${fishgram_base_version})
+string(REPLACE "." "," fishgram_resource_numeric "${desktop_app_version_string}")
+configure_file(Telegram/Resources/fishgram/version.h.in
+    "${CMAKE_CURRENT_BINARY_DIR}/fishgram_resource_version.h" @ONLY)
+include_directories("${CMAKE_CURRENT_BINARY_DIR}")
 
 if (NOT DEFINED CMAKE_CONFIGURATION_TYPES)
     set(configuration_types_init 1)

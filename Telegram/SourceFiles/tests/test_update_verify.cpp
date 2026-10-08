@@ -601,6 +601,18 @@ int main() {
 			"beta package accepted with the beta setting");
 		Check(verify(beta, Channel::Beta, false, runningStable).has_value(),
 			"beta package accepted on a beta build");
+
+		const auto stable = BuildSignedEnvelope(
+			Channel::Stable,
+			MakeUpdateVersion(5000000, 41),
+			manifestJson,
+			manifestSig,
+			{ &rl, &rc },
+			payload);
+		Check(verify(stable, Channel::Beta, false, runningStable).has_value(),
+			"new stable revision accepted on a beta build");
+		Check(verify(stable, Channel::Stable, true, runningStable).has_value(),
+			"new stable revision accepted with beta opt-in on a stable build");
 	}
 
 	{ // Version monotonicity.

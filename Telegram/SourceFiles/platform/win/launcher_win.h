@@ -8,6 +8,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #pragma once
 
 #include "core/launcher.h"
+#include "core/fishgram_client_gate_win.h"
 
 namespace Platform {
 
@@ -21,6 +22,7 @@ private:
 		char *argv[]) const override;
 
 	void initHook() override;
+	bool acquireClientSessionHook() override;
 	std::optional<int> recoverUpdateHook() override;
 
 	bool launchUpdater(UpdaterLaunch action) override;
@@ -29,6 +31,8 @@ private:
 		const QString &operation,
 		const QString &binaryPath,
 		const QStringList &argumentsList);
+
+	Core::FishGramClientGate::Lease _clientSessionLease;
 
 };
 

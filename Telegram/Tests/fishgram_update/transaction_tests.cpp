@@ -1,6 +1,9 @@
 #include "_other/fishgram_update_transaction.h"
+#include "core/fishgram_client_gate_win.h"
 
 #include <Windows.h>
+#include <Aclapi.h>
+#include <Sddl.h>
 
 #include <atomic>
 #include <cassert>
@@ -15,11 +18,13 @@
 #include <mutex>
 #include <string>
 #include <thread>
+#include <tuple>
 #include <vector>
 
 namespace {
 
 using namespace Core::FishGramUpdates::WindowsTransaction;
+namespace ClientGate = Core::FishGramClientGate;
 namespace fs = std::filesystem;
 
 constexpr std::uint32_t kReadyMagic = 0x7FFFFFFD;
@@ -27,6 +32,26 @@ constexpr std::uint32_t kStable = 0;
 constexpr std::uint32_t kBeta = 1;
 
 void Write(const fs::path &path, const std::string &value);
+
+void MakeTestPrivateDirectory(const fs::path &path) {
+	// Codex's shared TEMP has grants for additional sandbox identities. Build a
+	// private synthetic installation rather than weakening the production check.
+	HANDLE token = nullptr;
+	assert(OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token));
+	DWORD length = 0;
+	GetTokenInformation(token, TokenUser, nullptr, 0, &length);
+	std::vector<unsigned char> user(length);
+	assert(GetTokenInformation(token, TokenUser, user.data(), length, &length));
+	CloseHandle(token);
+	LPWSTR sid = nullptr;
+	assert(ConvertSidToStringSidW(reinterpret_cast<TOKEN_USER*>(user.data())->User.Sid, &sid));
+	const auto sddl = std::wstring(L"D:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;FA;;;") + sid + L")";
+	LocalFree(sid);
+	PSECURITY_DESCRIPTOR descriptor = nullptr;
+	assert(ConvertStringSecurityDescriptorToSecurityDescriptorW(sddl.c_str(), SDDL_REVISION_1, &descriptor, nullptr));
+	assert(SetFileSecurityW(path.c_str(), DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION, descriptor));
+	LocalFree(descriptor);
+}
 
 struct Fixture final {
 	explicit Fixture(const std::wstring &label) {
@@ -38,6 +63,8 @@ struct Fixture final {
 			+ std::to_wstring(++sequence));
 		install = root / L"install";
 		work = root / L"FishGramData";
+		fs::create_directories(root);
+		MakeTestPrivateDirectory(root);
 		fs::create_directories(install);
 		fs::create_directories(work / L"tupdates" / L"temp");
 		Write(install / L"Telegram.exe", "old-telegram");
@@ -368,6 +395,99 @@ void TestInstallLockSerializesSameDirectory() {
 	assert(firstResult == Result::Applied);
 }
 
+void TestClientSessionsShareLeaseAndBlockUpdater() {
+	Fixture fixture(L"client-lease-");
+	ClientGate::Lease first, second, updater;
+	assert(ClientGate::TryAcquire(fixture.install.wstring(), false, &first)
+		== ClientGate::AcquireResult::Acquired);
+	assert(ClientGate::TryAcquire(fixture.install.wstring(), false, &second)
+		== ClientGate::AcquireResult::Acquired);
+	assert(ClientGate::TryAcquire(fixture.install.wstring(), true, &updater)
+		== ClientGate::AcquireResult::Busy);
+	fixture.Payload(7002009001ULL);
+	auto request = fixture.RequestFor(7002009001ULL);
+	int processChecks = 0;
+	request.processRunning = [&](const std::wstring&) {
+		++processChecks;
+		return false;
+	};
+	assert(Apply(request) == Result::Busy);
+	assert(processChecks == 0);
+	auto makeGateChild = [&](const wchar_t *mode) {
+		const auto suffix = std::to_wstring(GetCurrentProcessId())
+			+ L"-" + std::to_wstring(GetTickCount64());
+		const auto readyName = L"Local\\FishGramGateReady-" + suffix;
+		const auto stopName = L"Local\\FishGramGateStop-" + suffix;
+		auto readyEvent = CreateEventW(nullptr, TRUE, FALSE, readyName.c_str());
+		auto stopEvent = CreateEventW(nullptr, TRUE, FALSE, stopName.c_str());
+		assert(readyEvent && stopEvent);
+		wchar_t executable[MAX_PATH] = {};
+		assert(GetModuleFileNameW(nullptr, executable, MAX_PATH));
+		auto command = std::wstring(L"\"") + executable
+			+ L"\" --client-gate-child \"" + fixture.install.wstring()
+			+ L"\" " + mode + L" \"" + readyName + L"\" \"" + stopName + L"\"";
+		STARTUPINFOW startup = { sizeof(startup) };
+		PROCESS_INFORMATION process = {};
+		assert(CreateProcessW(nullptr, command.data(), nullptr, nullptr, FALSE,
+			CREATE_NO_WINDOW, nullptr, nullptr, &startup, &process));
+		CloseHandle(process.hThread);
+		assert(WaitForSingleObject(readyEvent, 10000) == WAIT_OBJECT_0);
+		return std::tuple{ process.hProcess, readyEvent, stopEvent };
+	};
+	{
+		auto [process, ready, stop] = makeGateChild(L"shared");
+		assert(ClientGate::TryAcquire(fixture.install.wstring(), true, &updater)
+			== ClientGate::AcquireResult::Busy);
+		SetEvent(stop);
+		assert(WaitForSingleObject(process, 10000) == WAIT_OBJECT_0);
+		DWORD exitCode = 1;
+		assert(GetExitCodeProcess(process, &exitCode) && exitCode == 0);
+		CloseHandle(process);
+		CloseHandle(ready);
+		CloseHandle(stop);
+	}
+	first.Reset();
+	assert(ClientGate::TryAcquire(fixture.install.wstring(), true, &updater)
+		== ClientGate::AcquireResult::Busy);
+	second.Reset();
+	assert(ClientGate::TryAcquire(fixture.install.wstring(), true, &updater)
+		== ClientGate::AcquireResult::Acquired);
+	updater.Reset();
+	{
+		auto [process, ready, stop] = makeGateChild(L"exclusive");
+		ClientGate::Lease blockedClient;
+		assert(ClientGate::TryAcquire(fixture.install.wstring(), false, &blockedClient)
+			== ClientGate::AcquireResult::Busy);
+		SetEvent(stop);
+		assert(WaitForSingleObject(process, 10000) == WAIT_OBJECT_0);
+		DWORD exitCode = 1;
+		assert(GetExitCodeProcess(process, &exitCode) && exitCode == 0);
+		CloseHandle(process);
+		CloseHandle(ready);
+		CloseHandle(stop);
+		assert(ClientGate::TryAcquire(fixture.install.wstring(), false, &blockedClient)
+			== ClientGate::AcquireResult::Acquired);
+	}
+}
+
+void TestClientLeaseRejectsReparsePointAndPublicAcl() {
+	Fixture fixture(L"client-lease-policy-");
+	const auto gatePath = fixture.install / L"client-session.lock";
+	fs::create_symlink(fixture.root / L"missing-target", gatePath);
+	ClientGate::Lease lease;
+	assert(ClientGate::TryAcquire(fixture.install.wstring(), false, &lease)
+		== ClientGate::AcquireResult::Denied);
+	fs::remove(gatePath);
+	Write(gatePath, "synthetic lock");
+	PSECURITY_DESCRIPTOR descriptor = nullptr;
+	assert(ConvertStringSecurityDescriptorToSecurityDescriptorW(
+		L"D:(A;;FA;;;WD)", SDDL_REVISION_1, &descriptor, nullptr));
+	assert(SetFileSecurityW(gatePath.c_str(), DACL_SECURITY_INFORMATION, descriptor));
+	LocalFree(descriptor);
+	assert(ClientGate::TryAcquire(fixture.install.wstring(), false, &lease)
+		== ClientGate::AcquireResult::Denied);
+}
+
 void TestRetainsCurrentAndTwoPriorVersions() {
 	Fixture fixture(L"retention-");
 	for (std::uint64_t version = 7002009001ULL; version <= 7002009004ULL; ++version) {
@@ -407,6 +527,106 @@ void TestCommittedRecoveryAlsoTrimsProgramHistory() {
 	}
 }
 
+void AllowEveryoneToWrite(const fs::path &path) {
+	PSECURITY_DESCRIPTOR descriptor = nullptr;
+	assert(ConvertStringSecurityDescriptorToSecurityDescriptorW(
+		L"D:P(A;OICI;FA;;;WD)", SDDL_REVISION_1, &descriptor, nullptr));
+	assert(SetFileSecurityW(path.c_str(), DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION, descriptor));
+	LocalFree(descriptor);
+}
+
+void TestUnsafeInstallPermissionsCannotAuthorizeReplacement() {
+	Fixture fixture(L"unsafe-acl-");
+	fixture.Payload(7002009001ULL);
+	AllowEveryoneToWrite(fixture.install);
+	assert(Apply(fixture.RequestFor(7002009001ULL)) == Result::WriteDenied);
+	assert(Read(fixture.install / L"Telegram.exe") == "old-telegram");
+	std::wstring runner;
+	assert(!PrepareUpdateRunner(fixture.install.wstring(), &runner));
+	assert(InspectStartupRecovery(fixture.install.wstring()).state == StartupRecovery::State::None);
+}
+
+void TestExplicitlySharedProgramCannotBecomeRecoveryRunner() {
+	Fixture fixture(L"shared-program-acl-");
+	fixture.Payload(7002009001ULL);
+	AllowEveryoneToWrite(fixture.install / L"Updater.exe");
+	assert(Apply(fixture.RequestFor(7002009001ULL)) == Result::WriteDenied);
+	std::wstring runner;
+	assert(!PrepareUpdateRunner(fixture.install.wstring(), &runner));
+	assert(InspectStartupRecovery(fixture.install.wstring()).state == StartupRecovery::State::None);
+	assert(Read(fixture.install / L"Telegram.exe") == "old-telegram");
+}
+
+void TestRecoveryRejectsSharedMetadataAndBackup() {
+	Fixture fixture(L"shared-metadata-acl-");
+	fixture.Payload(7002009001ULL);
+	auto interrupted = fixture.RequestFor(7002009001ULL);
+	interrupted.afterReplace = [](std::size_t) { throw 42; };
+	try { (void)Apply(interrupted); assert(false); } catch (int code) { assert(code == 42); }
+	const auto meta = fixture.install / L".fishgram-update";
+	const auto backup = meta / L"pending" / L"backup" / L"Telegram.exe";
+	AllowEveryoneToWrite(backup);
+	assert(RecoverPending(fixture.install.wstring()) == Result::WriteDenied);
+	assert(InspectStartupRecovery(fixture.install.wstring()).state == StartupRecovery::State::Blocked);
+	assert(Read(fixture.install / L"Telegram.exe") == "new-telegram");
+	MakeTestPrivateDirectory(backup);
+	assert(RecoverPending(fixture.install.wstring()) == Result::Recovered);
+	assert(Read(fixture.install / L"Telegram.exe") == "old-telegram");
+	AllowEveryoneToWrite(meta);
+	assert(Apply(fixture.RequestFor(7002009001ULL)) == Result::WriteDenied);
+	std::wstring runner;
+	assert(!PrepareUpdateRunner(fixture.install.wstring(), &runner));
+	assert(InspectStartupRecovery(fixture.install.wstring()).state == StartupRecovery::State::None);
+}
+
+void TestDirectoryGuardsBlockAncestorReplacement() {
+	Fixture fixture(L"held-ancestor-");
+	fixture.Payload(7002009001ULL);
+	auto request = fixture.RequestFor(7002009001ULL);
+	request.onLockAcquired = [&] {
+		const auto movedInstall = fixture.root / L"install-moved";
+		assert(!MoveFileExW(fixture.install.c_str(), movedInstall.c_str(), 0));
+		assert(GetLastError() == ERROR_SHARING_VIOLATION || GetLastError() == ERROR_ACCESS_DENIED);
+		assert(!MoveFileExW(fixture.root.c_str(), (fixture.root.wstring() + L"-moved").c_str(), 0));
+		assert(GetLastError() == ERROR_SHARING_VIOLATION || GetLastError() == ERROR_ACCESS_DENIED);
+	};
+	assert(Apply(request) == Result::Applied);
+	assert(Read(fixture.install / L"Telegram.exe") == "new-telegram");
+}
+
+void TestSnapshotFailureNeverReplacesProgram() {
+	Fixture fixture(L"snapshot-fail-");
+	fixture.Payload(7002009001ULL);
+	auto request = fixture.RequestFor(7002009001ULL);
+	request.beforeProgramReplace = [&] {
+		assert(Read(fixture.install / L"Telegram.exe") == "old-telegram");
+		assert(!fs::exists(fixture.install / L".fishgram-update" / L"pending"));
+		return false;
+	};
+	assert(Apply(request) == Result::DataSnapshotFailed);
+	assert(Read(fixture.install / L"Telegram.exe") == "old-telegram");
+	assert(Read(fixture.work / L"tdata" / L"map0") == "working-account-secret");
+	bool snapshotCalled = false;
+	request.beforeProgramReplace = [&] { snapshotCalled = true; return true; };
+	request.processRunning = [](const std::wstring&) { return true; };
+	assert(Apply(request) == Result::AppRunning);
+	assert(!snapshotCalled);
+	request.processRunning = [](const std::wstring&) { return false; };
+	assert(Apply(request) == Result::Applied);
+	assert(snapshotCalled);
+}
+
+void TestElevatedPolicyExcludesTheOrdinaryUserWriter() {
+	Details::TrustedPrincipals trusted;
+	assert(trusted.valid);
+	trusted.elevated = false;
+	assert(trusted.Contains(trusted.UserSid()));
+	trusted.elevated = true;
+	assert(!trusted.Contains(trusted.UserSid()));
+	assert(trusted.Contains(trusted.system));
+	assert(trusted.Contains(trusted.admins));
+}
+
 int CrashChild(int argc, wchar_t **argv) {
 	assert(argc == 5);
 	Request request;
@@ -425,7 +645,23 @@ int CrashChild(int argc, wchar_t **argv) {
 } // namespace
 
 int wmain(int argc, wchar_t **argv) {
+	_set_error_mode(_OUT_TO_STDERR);
+	SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX);
 	if (argc > 1 && std::wstring(argv[1]) == L"--crash-child") return CrashChild(argc, argv);
+	if (argc > 1 && std::wstring(argv[1]) == L"--client-gate-child") {
+		if (argc != 6) return 4;
+		ClientGate::Lease lease;
+		const auto result = ClientGate::TryAcquire(
+			argv[2], std::wstring(argv[3]) == L"exclusive", &lease);
+		auto ready = OpenEventW(EVENT_MODIFY_STATE, FALSE, argv[4]);
+		auto stop = OpenEventW(SYNCHRONIZE, FALSE, argv[5]);
+		if (!ready || !stop) return 5;
+		SetEvent(ready);
+		if (result != ClientGate::AcquireResult::Acquired) return 6;
+		return WaitForSingleObject(stop, 30000) == WAIT_OBJECT_0 ? 0 : 7;
+	}
+	std::cout << "Begin Windows transaction tests." << std::endl;
+	try {
 	TestJournalSurvivesDurableCommit();
 	TestPortableWorkingDirectoryInsideInstallation();
 	TestApplyAndProtectAccountData();
@@ -440,8 +676,20 @@ int wmain(int argc, wchar_t **argv) {
 	TestPendingRecoveryDoesNotReplaceRunningProgram();
 	TestTrustedUpdateRunnerAndAuthorizationGate();
 	TestInstallLockSerializesSameDirectory();
+	TestClientSessionsShareLeaseAndBlockUpdater();
+	TestClientLeaseRejectsReparsePointAndPublicAcl();
 	TestRetainsCurrentAndTwoPriorVersions();
 	TestCommittedRecoveryAlsoTrimsProgramHistory();
+	TestUnsafeInstallPermissionsCannotAuthorizeReplacement();
+	TestExplicitlySharedProgramCannotBecomeRecoveryRunner();
+	TestRecoveryRejectsSharedMetadataAndBackup();
+	TestElevatedPolicyExcludesTheOrdinaryUserWriter();
+	TestDirectoryGuardsBlockAncestorReplacement();
+	TestSnapshotFailureNeverReplacesProgram();
 	std::cout << "Windows update transaction tests passed.\n";
 	return 0;
+	} catch (const std::exception &error) {
+		std::cerr << "Synthetic transaction fixture failed: " << error.what() << std::endl;
+		return 1;
+	}
 }

@@ -27,6 +27,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "_other/fishgram_update_transaction.h"
 #endif
 #include <set>
+#include <atomic>
 #include <QtCore/QCryptographicHash>
 #include "core/version.h"
 #include "data/data_channel.h"
@@ -118,7 +119,7 @@ public:
 	virtual bool poll() const;
 
 	rpl::producer<std::shared_ptr<Loader>> ready() const;
-	rpl::producer<> failed() const;
+	rpl::producer<UpdateFailure> failed() const;
 
 	rpl::lifetime &lifetime();
 
@@ -127,12 +128,12 @@ public:
 protected:
 	bool testing() const;
 	void done(std::shared_ptr<Loader> result);
-	void fail();
+	void fail(UpdateFailure reason);
 
 private:
 	bool _testing = false;
 	rpl::event_stream<std::shared_ptr<Loader>> _ready;
-	rpl::event_stream<> _failed;
+	rpl::event_stream<UpdateFailure> _failed;
 
 	rpl::lifetime _lifetime;
 
@@ -142,6 +143,7 @@ struct Implementation {
 	std::unique_ptr<Checker> checker;
 	std::shared_ptr<Loader> loader;
 	bool failed = false;
+	UpdateFailure failure = UpdateFailure::Network;
 
 };
 
@@ -177,6 +179,12 @@ class HttpLoader : public Loader {
 public:
 	HttpLoader(FishGramUpdates::Candidate candidate);
     const FishGramUpdates::Candidate &candidate() const { return _candidate; }
+	void setFailure(UpdateFailure failure) {
+		_failure.store(failure, std::memory_order_relaxed);
+	}
+	UpdateFailure failure() const {
+		return _failure.load(std::memory_order_relaxed);
+	}
 
 	~HttpLoader();
 
@@ -189,6 +197,7 @@ private:
     FishGramUpdates::Candidate _candidate;
 	std::unique_ptr<QThread> _thread;
 	HttpLoaderActor *_actor = nullptr;
+	std::atomic<UpdateFailure> _failure = UpdateFailure::Download;
 
 };
 
@@ -483,9 +492,11 @@ QString ExtractFilename(const QString &url) {
         && ready.commit();
 }
 
-[[nodiscard]] bool UnpackUpdateV2(
+	[[nodiscard]] bool UnpackUpdateV2(
 		const QString &filepath,
-		const QByteArray &content) {
+		const QByteArray &content,
+		UpdateFailure *failure) {
+	if (failure) *failure = UpdateFailure::Staging;
 	// The expected target follows the feed key, not the build: an x64
 	// build under Rosetta asks for armac and must accept that package.
 	const auto target = Updates::TargetFromPlatformKey(
@@ -511,6 +522,16 @@ QString ExtractFilename(const QString &url) {
 		&error);
 	if (!verified) {
 		LOG(("Update Error: v2 update rejected: %1").arg(error));
+		if (failure) {
+			const auto authorizationFailure = error.contains(
+				u"signature"_q,
+				Qt::CaseInsensitive)
+				|| error.contains(u"manifest"_q, Qt::CaseInsensitive)
+				|| error.contains(u"key"_q, Qt::CaseInsensitive);
+			*failure = authorizationFailure
+				? UpdateFailure::Signature
+				: UpdateFailure::DownloadValidation;
+		}
 		return false;
 	}
 	if (verified->adoptManifest) {
@@ -613,7 +634,11 @@ QString ExtractFilename(const QString &url) {
 
 #endif // !TDESKTOP_DISABLE_AUTOUPDATE
 
-bool UnpackUpdate(const QString &filepath, const FishGramUpdates::Candidate &candidate) {
+bool UnpackUpdate(
+		const QString &filepath,
+		const FishGramUpdates::Candidate &candidate,
+		UpdateFailure *failure) {
+    if (failure) *failure = UpdateFailure::DownloadValidation;
 #ifndef TDESKTOP_DISABLE_AUTOUPDATE
     QFile input(filepath);
     if (filepath.isEmpty() || !input.open(QIODevice::ReadOnly)
@@ -633,7 +658,7 @@ bool UnpackUpdate(const QString &filepath, const FishGramUpdates::Candidate &can
         LOG(("FishGram Update Error: signed channel or full version does not match discovery."));
         return false;
     }
-    return UnpackUpdateV2(filepath, content);
+    return UnpackUpdateV2(filepath, content, failure);
 #else
     return false;
 #endif
@@ -646,7 +671,7 @@ rpl::producer<std::shared_ptr<Loader>> Checker::ready() const {
 	return _ready.events();
 }
 
-rpl::producer<> Checker::failed() const {
+rpl::producer<UpdateFailure> Checker::failed() const {
 	return _failed.events();
 }
 
@@ -662,8 +687,8 @@ void Checker::done(std::shared_ptr<Loader> result) {
 	_ready.fire(std::move(result));
 }
 
-void Checker::fail() {
-	_failed.fire({});
+void Checker::fail(UpdateFailure reason) {
+	_failed.fire_copy(reason);
 }
 
 rpl::lifetime &Checker::lifetime() {
@@ -674,6 +699,10 @@ HttpChecker::HttpChecker(bool testing) : Checker(testing) {
 }
 
 void HttpChecker::start() {
+    if (Updates::RootPublicKeyPem().isEmpty()) {
+        fail(UpdateFailure::NotConfigured);
+        return;
+    }
     request(Request::Manifest);
 }
 
@@ -696,34 +725,57 @@ void HttpChecker::request(Request step) {
 
 void HttpChecker::gotResponse() {
     if (!_reply) return;
-    if (_reply->error() != QNetworkReply::NoError
-        || _reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt() != 200) {
-        gotFailure(QNetworkReply::UnknownContentError);
+    const auto status = _reply->attribute(
+		QNetworkRequest::HttpStatusCodeAttribute);
+    if (status.isValid() && status.toInt() != 200) {
+        clearSentRequest();
+        fail(UpdateFailure::Network);
+        return;
+    }
+    if (_reply->error() != QNetworkReply::NoError) {
+        gotFailure(_reply->error());
+        return;
+    }
+    if (!status.isValid()) {
+        clearSentRequest();
+        fail(UpdateFailure::Network);
         return;
     }
     const auto response = _reply->readAll();
     clearSentRequest();
     if (response.size() >= kMaxResponseSize) {
-        fail();
+        fail(FailureForInvalidResponse(_request == Request::Feed
+			? UpdateRequestStage::Index
+			: (_request == Request::ManifestSignature
+				? UpdateRequestStage::ManifestSignature
+				: UpdateRequestStage::Manifest)));
         return;
     }
     if (_request == Request::Manifest) {
         _manifestBytes = response;
         request(Request::ManifestSignature);
     } else if (_request == Request::ManifestSignature) {
+        auto manifestError = QString();
         const auto manifest = Updates::ParseVerifiedManifest(
-            _manifestBytes, response, Updates::RootPublicKeyPem());
+            _manifestBytes,
+            response,
+            Updates::RootPublicKeyPem(),
+            &manifestError);
         const auto held = HeldManifest();
         if (!manifest || (held && (manifest->version < held->version
             || (manifest->version == held->version && manifest->bytes != held->bytes)))) {
             LOG(("FishGram Update Error: key manifest verification or monotonic version failed."));
-            fail();
+            fail(FailureForInvalidResponse(manifestError.contains(
+				u"signature"_q,
+				Qt::CaseInsensitive)
+				? UpdateRequestStage::ManifestSignature
+				: UpdateRequestStage::Manifest));
             return;
         }
         AdoptManifest(*manifest);
         request(Request::Feed);
     } else if (!handleResponse(response)) {
-        fail();
+        fail(UpdateFailure::Index);
     }
 }
 
@@ -759,11 +811,18 @@ HttpChecker::~HttpChecker() {
 void HttpChecker::gotFailure(QNetworkReply::NetworkError e) {
 	LOG(("Update Error: "
 		"could not get current version %1").arg(e));
+	const auto status = _reply
+		? _reply->attribute(QNetworkRequest::HttpStatusCodeAttribute)
+		: QVariant();
 	if (const auto reply = base::take(_reply)) {
 		reply->deleteLater();
 	}
+	if (status.isValid() && status.toInt() != 200) {
+		fail(UpdateFailure::Network);
+		return;
+	}
 
-	fail();
+	fail(FailureForRequestError(e == QNetworkReply::TimeoutError));
 }
 
 HttpLoader::HttpLoader(FishGramUpdates::Candidate candidate)
@@ -843,7 +902,11 @@ void HttpLoaderActor::gotMetaData() {
 		if (QString::fromUtf8(pair.first).toLower() == "content-range") {
 			const auto m = QRegularExpression(u"/(\\d+)([^\\d]|$)"_q).match(QString::fromUtf8(pair.second));
 			if (m.hasMatch()) {
-				_parent->writeChunk({}, m.captured(1).toLongLong());
+				const auto total = m.captured(1).toLongLong();
+				if (total > Loader::kMaxFileSize) {
+					_parent->setFailure(UpdateFailure::DownloadValidation);
+				}
+				_parent->writeChunk({}, total);
 			}
 		}
 	}
@@ -860,6 +923,7 @@ void HttpLoaderActor::partFinished(qint64 got, qint64 total) {
 			LOG(("Update Error: "
 				"Bad HTTP status received in partFinished(): %1"
 				).arg(status));
+			_parent->setFailure(UpdateFailure::Download);
 			_parent->threadSafeFailed();
 			return;
 		}
@@ -868,6 +932,11 @@ void HttpLoaderActor::partFinished(qint64 got, qint64 total) {
 	DEBUG_LOG(("Update Info: part %1 of %2").arg(got).arg(total));
 
 	const auto data = _reply->readAll();
+	if (total > Loader::kMaxFileSize) {
+		_parent->setFailure(UpdateFailure::DownloadValidation);
+		_parent->threadSafeFailed();
+		return;
+	}
 	_parent->writeChunk(bytes::make_span(data), total);
 }
 
@@ -887,6 +956,9 @@ void HttpLoaderActor::partFailed(QNetworkReply::NetworkError e) {
 	LOG(("Update Error: failed to download part after %1, error %2"
 		).arg(_parent->alreadySize()
 		).arg(e));
+	_parent->setFailure(e == QNetworkReply::TimeoutError
+		? UpdateFailure::Timeout
+		: UpdateFailure::Network);
 	_parent->threadSafeFailed();
 }
 
@@ -920,7 +992,7 @@ FlatpakChecker::FlatpakChecker(bool testing)
 				Gio::DBusErrorNS_::strip_remote_error(result.error());
 				LOG(("Update Error: %1").arg(
 					result.error().message_().c_str()));
-				fail();
+				fail(UpdateFailure::Network);
 				return;
 			}
 
@@ -938,7 +1010,7 @@ FlatpakChecker::FlatpakChecker(bool testing)
 					Gio::DBusErrorNS_::strip_remote_error(result.error());
 					LOG(("Update Error: %1").arg(
 						result.error().message_().c_str()));
-					fail();
+					fail(UpdateFailure::Network);
 					return;
 				}
 
@@ -1065,6 +1137,7 @@ public:
 	rpl::producer<> isLatest() const;
 	rpl::producer<Progress> progress() const;
 	rpl::producer<> failed() const;
+	UpdateFailure failureReason() const;
 	rpl::producer<> ready() const;
 
 	void start(bool forceWait);
@@ -1097,10 +1170,13 @@ private:
 	void checkerDone(
 		not_null<Implementation*> which,
 		std::shared_ptr<Loader> loader);
-	void checkerFail(not_null<Implementation*> which);
+	void checkerFail(
+		not_null<Implementation*> which,
+		UpdateFailure failure);
+	void fail(UpdateFailure reason);
 
 	void finalize(QString filepath);
-	void unpackDone(bool ready);
+	void unpackDone(bool ready, UpdateFailure failure);
 	void handleChecking();
 	void handleProgress();
 	void handleLatest();
@@ -1125,6 +1201,7 @@ private:
 	base::weak_ptr<Main::Session> _session;
 
 	rpl::lifetime _lifetime;
+	std::atomic<UpdateFailure> _failure = UpdateFailure::None;
 
 };
 
@@ -1165,6 +1242,10 @@ rpl::producer<> Updater::failed() const {
 	return _failed.events();
 }
 
+UpdateFailure Updater::failureReason() const {
+	return _failure.load(std::memory_order_relaxed);
+}
+
 rpl::producer<> Updater::ready() const {
 	return _ready.events();
 }
@@ -1174,6 +1255,7 @@ void Updater::check() {
 }
 
 void Updater::handleReady() {
+	_failure.store(UpdateFailure::None, std::memory_order_relaxed);
 	stop();
 	_action = Action::Ready;
 	if (!Quitting()) {
@@ -1187,6 +1269,7 @@ void Updater::handleFailed() {
 }
 
 void Updater::handleLatest() {
+	_failure.store(UpdateFailure::None, std::memory_order_relaxed);
 	if (const auto update = FindUpdateFile(); !update.isEmpty()) {
 		QFile(update).remove();
 	}
@@ -1194,12 +1277,18 @@ void Updater::handleLatest() {
 }
 
 void Updater::handleChecking() {
+	_failure.store(UpdateFailure::None, std::memory_order_relaxed);
 	_action = Action::Checking;
 	_retryTimer.callOnce(kUpdaterTimeout);
 }
 
 void Updater::handleProgress() {
 	_retryTimer.callOnce(kUpdaterTimeout);
+}
+
+void Updater::fail(UpdateFailure reason) {
+	_failure.store(reason, std::memory_order_relaxed);
+	_failed.fire({});
 }
 
 void Updater::scheduleNext() {
@@ -1280,11 +1369,10 @@ void Updater::start(bool forceWait) {
 		}
 #endif // !Q_OS_WIN && !Q_OS_MAC
 	} else if (sendRequest) {
+		_checking.fire({});
         startImplementation(&_httpImplementation, std::make_unique<HttpChecker>(_testing));
         _mtpImplementation = Implementation{};
         _mtpImplementation.failed = true;
-
-		_checking.fire({});
 	} else {
 		_timer.callOnce((updateInSecs + 5) * crl::time(1000));
 	}
@@ -1300,7 +1388,7 @@ void Updater::startImplementation(
 			}
 
 			void start() override {
-				crl::on_main(this, [=] { fail(); });
+				crl::on_main(this, [=] { fail(UpdateFailure::Network); });
 			}
 
 		};
@@ -1312,8 +1400,8 @@ void Updater::startImplementation(
 		checkerDone(which, std::move(loader));
 	}, checker->lifetime());
 	checker->failed(
-	) | rpl::on_next([=] {
-		checkerFail(which);
+	) | rpl::on_next([=](UpdateFailure failure) {
+		checkerFail(which, failure);
 	}, checker->lifetime());
 
 	*which = Implementation{ std::move(checker) };
@@ -1332,9 +1420,12 @@ void Updater::checkerDone(
 	tryLoaders();
 }
 
-void Updater::checkerFail(not_null<Implementation*> which) {
+void Updater::checkerFail(
+		not_null<Implementation*> which,
+		UpdateFailure failure) {
 	which->checker = nullptr;
 	which->failed = true;
+	which->failure = failure;
 
 	tryLoaders();
 }
@@ -1354,6 +1445,7 @@ void Updater::handleTimeout() {
 		const auto reset = [&](Implementation &which) {
 			if (base::take(which.checker)) {
 				which.failed = true;
+				which.failure = UpdateFailure::Timeout;
 			}
 		};
 		reset(_httpImplementation);
@@ -1363,7 +1455,10 @@ void Updater::handleTimeout() {
 			_timer.callOnce(kUpdaterTimeout);
 		}
 	} else if (_action == Action::Loading) {
-		_failed.fire({});
+		const auto loader = std::dynamic_pointer_cast<HttpLoader>(_activeLoader);
+		fail(loader && loader->failure() == UpdateFailure::DownloadValidation
+			? UpdateFailure::DownloadValidation
+			: UpdateFailure::Timeout);
 	}
 }
 
@@ -1387,7 +1482,8 @@ bool Updater::tryLoaders() {
 			}, loader->lifetime());
 			loader->failed(
 			) | rpl::on_next([=] {
-				_failed.fire({});
+				const auto http = std::dynamic_pointer_cast<HttpLoader>(_activeLoader);
+				fail(http ? http->failure() : UpdateFailure::Download);
 			}, loader->lifetime());
 
 			_retryTimer.callOnce(kUpdaterTimeout);
@@ -1399,13 +1495,13 @@ bool Updater::tryLoaders() {
 	};
 	if (KSandbox::isFlatpak()) {
 		if (_flatpakImplementation.failed) {
-			_failed.fire({});
+			fail(_flatpakImplementation.failure);
 			return false;
 		} else {
 			tryOne(_flatpakImplementation);
 		}
 	} else if (_mtpImplementation.failed && _httpImplementation.failed) {
-		_failed.fire({});
+		fail(_httpImplementation.failure);
 		return false;
 	} else if (!_mtpImplementation.loader) {
 		tryOne(_httpImplementation);
@@ -1429,19 +1525,20 @@ void Updater::finalize(QString filepath) {
 	_activeLoader = nullptr;
 	_action = Action::Unpacking;
 	crl::async([=] {
-		const auto ready = UnpackUpdate(filepath, candidate);
+		auto failure = UpdateFailure::DownloadValidation;
+		const auto ready = UnpackUpdate(filepath, candidate, &failure);
 		crl::on_main([=] {
-			GetUpdaterInstance()->unpackDone(ready);
+			GetUpdaterInstance()->unpackDone(ready, failure);
 		});
 	});
 }
 
-void Updater::unpackDone(bool ready) {
+void Updater::unpackDone(bool ready, UpdateFailure failure) {
 	if (ready) {
 		_ready.fire({});
 	} else {
 		ClearAll();
-		_failed.fire({});
+		fail(failure);
 	}
 }
 
@@ -1510,6 +1607,10 @@ int UpdateChecker::size() const {
 
 bool UpdateChecker::percent() const {
 	return _updater->percent();
+}
+
+UpdateFailure UpdateChecker::failureReason() const {
+	return _updater->failureReason();
 }
 
 //QString winapiErrorWrap() {

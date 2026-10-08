@@ -358,6 +358,9 @@ int Launcher::exec() {
 	if (!Platform::CheckAppTranslocation()) {
 		return 0;
 	}
+	if (!acquireClientSessionHook()) {
+		return 1;
+	}
 
 	// Must be started before Platform is started.
 	Logs::start();
@@ -367,6 +370,7 @@ int Launcher::exec() {
 		Logs::finish();
 		return *recoveryResult;
 	}
+	workingFolderReady();
 	base::options::init(cWorkingDir() + "tdata/experimental_options.json");
 
 	// Must be called after options are inited.

@@ -20,7 +20,7 @@ struct Feed {
 
 [[nodiscard]] std::optional<Feed> ParseFeed(
 	const QByteArray &json,
-	const QString &channel,
+	const QString &indexChannel,
 	quint64 running,
 	QString *error = nullptr);
 
