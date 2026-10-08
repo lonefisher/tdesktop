@@ -58,8 +58,8 @@ jobs:
           git update-index --cacheinfo "160000,$sha,tdesktop"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $recipe=Get-Content -Raw fishgram.json | ConvertFrom-Json
-          $version=Get-Content -Raw tdesktop/Telegram/SourceFiles/core/version.h
-          if ($version -notmatch 'AppVersionStr\s*=\s*"(\d+\.\d+\.\d+)"') { throw 'Unknown source version' }
+          $version=Get-Content -Raw tdesktop/Telegram/build/version
+          if ($version -notmatch '(?m)^AppVersionStr\s+(\d+\.\d+\.\d+)\s*\r?$') { throw 'Unknown source version' }
           $recipe.upstreamVersion=$Matches[1]
           $recipe.releaseReady=$false
           $recipe | ConvertTo-Json -Depth 4 | Set-Content fishgram.json

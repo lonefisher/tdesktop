@@ -351,7 +351,7 @@ void AppendLeU64(QByteArray &to, quint64 value) {
 
 } // namespace
 
-int main(int argc, char *argv[]) {
+int main() {
 	constexpr auto kNow = qint64(1800000000);
 	const auto payload = QByteArray("test-payload-not-really-lzma");
 
@@ -419,6 +419,10 @@ int main(int argc, char *argv[]) {
 	};
 
 	{ // The committed trust files must verify with the pinned root.
+#ifndef FISHGRAM_UPDATE_TRUST_CONFIGURED
+		Check(RootPublicKeyPem().isEmpty() && EmbeddedManifest().isEmpty()
+			&& EmbeddedManifestSignature().isEmpty(), "unconfigured FishGram never trusts official updates");
+#else
 		auto error = QString();
 		const auto embedded = ParseVerifiedManifest(
 			EmbeddedManifest(),
@@ -427,10 +431,31 @@ int main(int argc, char *argv[]) {
 			&error);
 		Check(embedded.has_value(), "embedded manifest verifies");
 		Check(embedded && embedded->version >= 1, "embedded manifest version");
-		Check(embedded && embedded->channels.size() == 4,
-			"embedded manifest lists all four channels");
+		Check(embedded && embedded->channels.size() == 2
+			&& embedded->channels.contains("stable")
+			&& embedded->channels.contains("beta"),
+			"FishGram embedded manifest lists stable and beta channels");
 		Check(embedded && !embedded->keys.empty(),
 			"embedded manifest has usable keys");
+#endif
+	}
+	{ // Even still-authorized keys cannot roll the root manifest backwards.
+		auto older = spec;
+		older.version = 1;
+		const auto json = MakeManifestJson(older);
+		const auto sig = SignWith(root, json);
+		const auto package = BuildSignedEnvelope(Channel::Stable,
+			MakeUpdateVersion(5000001, 9), json, sig, { &rl, &rc }, payload);
+		Check(!verify(package, Channel::Stable, false, runningStable),
+			"older manifest rejected even when its key is not revoked");
+	}
+	{ // Stable builds compare the complete FishGram revision too.
+		const auto package = BuildSignedEnvelope(Channel::Stable,
+			MakeUpdateVersion(5000000, 9), manifestJson, manifestSig, { &rl, &rc }, payload);
+		Check(verify(package, Channel::Stable, false, MakeUpdateVersion(5000000, 8)).has_value(),
+			"same-base stable r8 to r9 accepted");
+		Check(!verify(package, Channel::Stable, false, MakeUpdateVersion(5000000, 9)),
+			"same full stable version rejected");
 	}
 
 	{ // A good stable package needs one rl AND one rc signature.

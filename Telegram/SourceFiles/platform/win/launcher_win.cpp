@@ -152,9 +152,7 @@ bool Launcher::launchUpdater(UpdaterLaunch action) {
 			: QString());
 	const auto binaryPath = (action == UpdaterLaunch::JustRelaunch)
 		? (cExeDir() + cExeName())
-		: (cWriteProtected()
-			? (cWorkingDir() + u"tupdates/temp/Updater.exe"_q)
-			: (cExeDir() + u"Updater.exe"_q));
+		: (cWorkingDir() + u"tupdates/temp/Updater.exe"_q);
 
 	auto argumentsList = QStringList();
 	const auto pushArgument = [&](const QString &argument) {
@@ -187,6 +185,8 @@ bool Launcher::launchUpdater(UpdaterLaunch action) {
 		pushArgument(u"-update"_q);
 		pushArgument(u"-exename"_q);
 		pushArgument('"' + cExeName() + '"');
+		pushArgument(u"-installpath"_q);
+		pushArgument('"' + cExeDir() + '"');
 		if (cWriteProtected()) {
 			pushArgument(u"-writeprotected"_q);
 			pushArgument('"' + cExeDir() + '"');

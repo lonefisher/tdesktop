@@ -12,6 +12,14 @@ include(cmake/validate_special_target.cmake)
 include(cmake/version.cmake)
 desktop_app_parse_version(Telegram/build/version)
 
+set(FISHGRAM_REVISION "1" CACHE STRING "FishGram release revision (positive uint32).")
+if (NOT FISHGRAM_REVISION MATCHES "^[1-9][0-9]*$" OR FISHGRAM_REVISION GREATER 4294967295)
+    message(FATAL_ERROR "FISHGRAM_REVISION must be a positive uint32.")
+endif()
+file(STRINGS "${CMAKE_CURRENT_SOURCE_DIR}/Telegram/build/version" fishgram_version_line REGEX "^AppVersion ")
+string(REGEX REPLACE "^AppVersion[ \t]+" "" fishgram_base_version "${fishgram_version_line}")
+add_compile_definitions(FISHGRAM_REVISION=${FISHGRAM_REVISION} FISHGRAM_BASE_VERSION=${fishgram_base_version})
+
 if (NOT DEFINED CMAKE_CONFIGURATION_TYPES)
     set(configuration_types_init 1)
 endif()
@@ -19,8 +27,8 @@ endif()
 project(Telegram
     LANGUAGES C CXX
     VERSION ${desktop_app_version_cmake}
-    DESCRIPTION "Official Telegram Desktop messenger"
-    HOMEPAGE_URL "https://desktop.telegram.org"
+    DESCRIPTION "FishGram unofficial client based on Telegram API"
+    HOMEPAGE_URL "https://github.com/lonefisher/fishgram"
 )
 
 if (APPLE)

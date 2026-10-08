@@ -54,7 +54,28 @@ if (WIN32)
 endif()
 
 include(cmake/generate_update_keys.cmake)
-generate_update_keys(Telegram ${res_loc}/update)
+set(FISHGRAM_UPDATE_TRUST_DIRECTORY "" CACHE PATH "FishGram public root and signed key manifest directory.")
+if (EXISTS "${FISHGRAM_UPDATE_TRUST_DIRECTORY}/root-public.pem"
+    AND EXISTS "${FISHGRAM_UPDATE_TRUST_DIRECTORY}/manifest.min.json"
+    AND EXISTS "${FISHGRAM_UPDATE_TRUST_DIRECTORY}/manifest.sig")
+    file(SHA256 "${FISHGRAM_UPDATE_TRUST_DIRECTORY}/root-public.pem" fishgram_root_hash)
+    file(SHA256 "${res_loc}/update/root-public.pem" official_root_hash)
+    if (fishgram_root_hash STREQUAL official_root_hash)
+        message(FATAL_ERROR "FishGram cannot trust the official Telegram update root.")
+    endif()
+    add_compile_definitions(FISHGRAM_UPDATE_TRUST_CONFIGURED=1)
+    generate_update_keys(Telegram "${FISHGRAM_UPDATE_TRUST_DIRECTORY}")
+else()
+    if (NOT DESKTOP_APP_DISABLE_AUTOUPDATE)
+        message(FATAL_ERROR "FishGram automatic updates require its own public trust bundle.")
+    endif()
+    set(fishgram_empty_trust "${CMAKE_CURRENT_BINARY_DIR}/unconfigured-update-trust")
+    file(MAKE_DIRECTORY "${fishgram_empty_trust}")
+    foreach(trust_file root-public.pem manifest.min.json manifest.sig)
+        file(WRITE "${fishgram_empty_trust}/${trust_file}" "UNCONFIGURED")
+    endforeach()
+    generate_update_keys(Telegram "${fishgram_empty_trust}")
+endif()
 
 if (DESKTOP_APP_TEST_APPS OR DESKTOP_APP_SPECIAL_TARGET)
     include(cmake/test_update_verify.cmake)
@@ -601,6 +622,9 @@ PRIVATE
     core/ui_integration.cpp
     core/ui_integration.h
     core/update_channel.h
+    core/fishgram_update_policy.h
+    core/fishgram_update_feed.h
+    core/fishgram_update_feed.cpp
     core/update_checker.cpp
     core/update_checker.h
     core/update_keys.cpp
