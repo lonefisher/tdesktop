@@ -22,7 +22,7 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           repository: lonefisher/fishgram
-          ref: 9479d839eb12c9f002bc032b8da658069fd87d5c
+          ref: aaff63ed3b7a1339b3a9b0f12740d2468f67a7e8
           path: product
           persist-credentials: false
       - name: Test actual production helpers
@@ -41,7 +41,7 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           repository: lonefisher/fishgram
-          ref: 9479d839eb12c9f002bc032b8da658069fd87d5c
+          ref: aaff63ed3b7a1339b3a9b0f12740d2468f67a7e8
           path: product
           persist-credentials: false
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
@@ -86,3 +86,4 @@ jobs:
           path: product/reports/*-diagnostics.json
           if-no-files-found: ignore
           retention-days: 7
+
