@@ -22,9 +22,12 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           repository: lonefisher/fishgram
-          ref: 26623a7454f50ad152675b66bcee97a7015a84de
+          ref: 7dbc44234dbe1a1426afa1e412a1a52ca9ca710b
           path: product
           persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.13'
       - name: Test actual production helpers
         shell: pwsh
         run: |
@@ -32,6 +35,8 @@ jobs:
           ./product/tools/test-restricted-search-integration.ps1 -SourceRoot "$PWD/source" -OutputDirectory "$PWD/build-search-integration-tests"
           ./product/tools/test-update-policy.ps1 -SourceRoot "$PWD/source"
           ./product/tools/test-update-transaction.ps1 -SourceRoot "$PWD/source"
+          python -m unittest discover -s product/tests -p test_data_recovery.py -v
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
   compile:
     name: Source test identity compile
     if: github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch'
@@ -42,7 +47,7 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           repository: lonefisher/fishgram
-          ref: 26623a7454f50ad152675b66bcee97a7015a84de
+          ref: 7dbc44234dbe1a1426afa1e412a1a52ca9ca710b
           path: product
           persist-credentials: false
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262

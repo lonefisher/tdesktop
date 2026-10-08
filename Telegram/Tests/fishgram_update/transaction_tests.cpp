@@ -676,7 +676,7 @@ int wmain(int argc, wchar_t **argv) {
 		if (result != ClientGate::AcquireResult::Acquired) return 6;
 		return WaitForSingleObject(stop, 30000) == WAIT_OBJECT_0 ? 0 : 7;
 	}
-	std::cout << "Begin Windows transaction tests." << std::endl;
+	std::cout << "Begin Windows transaction tests. elevated=" << Details::TrustedPrincipals().elevated << std::endl;
 	try {
 	TestJournalSurvivesDurableCommit();
 	TestPortableWorkingDirectoryInsideInstallation();
