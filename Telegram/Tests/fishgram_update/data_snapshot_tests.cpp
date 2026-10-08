@@ -30,6 +30,8 @@ bool TakeSnapshot(const QString &work, const QString &exe, QString *error) {
 	return okay;
 }
 
+void AssertNativeSnapshotAcl(const QString &path);
+
 void Private(const QString &path) {
 	HANDLE token = nullptr;
 	assert(OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token));
@@ -37,25 +39,33 @@ void Private(const QString &path) {
 	GetTokenInformation(token, TokenUser, nullptr, 0, &size);
 	std::vector<unsigned char> data(size);
 	assert(GetTokenInformation(token, TokenUser, data.data(), size, &size));
+	TOKEN_ELEVATION elevation = {};
+	assert(GetTokenInformation(token, TokenElevation, &elevation, sizeof(elevation), &size));
 	CloseHandle(token);
 	LPWSTR sid = nullptr;
 	assert(ConvertSidToStringSidW(reinterpret_cast<TOKEN_USER*>(data.data())->User.Sid, &sid));
-	const auto sddl = QStringLiteral("D:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;FA;;;%1)").arg(QString::fromWCharArray(sid));
+	const auto sddl = (elevation.TokenIsElevated
+		? QStringLiteral("O:BAD:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;GRGX;;;%1)")
+		: QStringLiteral("D:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;FA;;;%1)"))
+		.arg(QString::fromWCharArray(sid));
 	LocalFree(sid);
 	PSECURITY_DESCRIPTOR descriptor = nullptr;
 	assert(ConvertStringSecurityDescriptorToSecurityDescriptorW(reinterpret_cast<LPCWSTR>(sddl.utf16()), SDDL_REVISION_1, &descriptor, nullptr));
-	assert(SetFileSecurityW(reinterpret_cast<LPCWSTR>(path.utf16()), DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION, descriptor));
+	const auto fields = DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION
+		| (elevation.TokenIsElevated ? OWNER_SECURITY_INFORMATION : 0);
+	assert(SetFileSecurityW(reinterpret_cast<LPCWSTR>(path.utf16()), fields, descriptor));
 	LocalFree(descriptor);
+	AssertNativeSnapshotAcl(path);
 }
 
 struct Fixture final {
 	explicit Fixture(const QString &tempTemplate = {}) : temp(tempTemplate) {
 		assert(temp.isValid());
+		Private(temp.path());
 		work = temp.path() + QStringLiteral("/portable-work");
 		install = temp.path() + QStringLiteral("/install");
 		assert(QDir().mkpath(work));
 		assert(QDir().mkpath(install));
-		Private(temp.path());
 		exe = install + QStringLiteral("/Telegram.exe");
 		Write(exe, "synthetic executable");
 	}
@@ -108,6 +118,52 @@ QString SnapshotRoot(const QString &work) {
 	return QFileInfo(work).absolutePath() + QStringLiteral("/.fishgram-snapshots-") + QString::fromLatin1(hash);
 }
 
+void AssertNativeSnapshotAcl(const QString &path) {
+	PSID owner = nullptr;
+	PACL dacl = nullptr;
+	PSECURITY_DESCRIPTOR descriptor = nullptr;
+	assert(GetNamedSecurityInfoW(reinterpret_cast<LPWSTR>(const_cast<ushort*>(path.utf16())),
+		SE_FILE_OBJECT, OWNER_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION,
+		&owner, nullptr, &dacl, nullptr, &descriptor) == ERROR_SUCCESS);
+	HANDLE token = nullptr;
+	assert(OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token));
+	DWORD size = 0;
+	GetTokenInformation(token, TokenUser, nullptr, 0, &size);
+	std::vector<unsigned char> userData(size);
+	assert(GetTokenInformation(token, TokenUser, userData.data(), size, &size));
+	TOKEN_ELEVATION elevation = {};
+	assert(GetTokenInformation(token, TokenElevation, &elevation, sizeof(elevation), &size));
+	PSID user = reinterpret_cast<TOKEN_USER*>(userData.data())->User.Sid;
+	unsigned char admins[SECURITY_MAX_SID_SIZE] = {}, system[SECURITY_MAX_SID_SIZE] = {};
+	DWORD adminsSize = sizeof(admins), systemSize = sizeof(system);
+	assert(CreateWellKnownSid(WinBuiltinAdministratorsSid, nullptr, admins, &adminsSize));
+	assert(CreateWellKnownSid(WinLocalSystemSid, nullptr, system, &systemSize));
+	assert((EqualSid(owner, admins) || EqualSid(owner, system)
+		|| (!elevation.TokenIsElevated && EqualSid(owner, user))));
+	SECURITY_DESCRIPTOR_CONTROL control = {};
+	DWORD revision = 0;
+	assert(GetSecurityDescriptorControl(descriptor, &control, &revision));
+	assert(control & SE_DACL_PROTECTED);
+	assert(dacl && IsValidAcl(dacl) && dacl->AceCount == 3);
+	const DWORD userMask = elevation.TokenIsElevated
+		? (FILE_GENERIC_READ | FILE_GENERIC_EXECUTE) : FILE_ALL_ACCESS;
+	bool sawUser = false, sawSystem = false, sawAdmins = false;
+	for (DWORD i = 0; i != dacl->AceCount; ++i) {
+		void *raw = nullptr;
+		assert(GetAce(dacl, i, &raw));
+		const auto header = static_cast<ACE_HEADER*>(raw);
+		assert(header->AceType == ACCESS_ALLOWED_ACE_TYPE && header->AceFlags == (OBJECT_INHERIT_ACE | CONTAINER_INHERIT_ACE));
+		const auto ace = static_cast<ACCESS_ALLOWED_ACE*>(raw);
+		if (EqualSid(&ace->SidStart, user)) { assert(!sawUser && ace->Mask == userMask); sawUser = true; }
+		else if (EqualSid(&ace->SidStart, system)) { assert(!sawSystem && ace->Mask == FILE_ALL_ACCESS); sawSystem = true; }
+		else if (EqualSid(&ace->SidStart, admins)) { assert(!sawAdmins && ace->Mask == FILE_ALL_ACCESS); sawAdmins = true; }
+		else assert(false);
+	}
+	assert(sawUser && sawSystem && sawAdmins);
+	CloseHandle(token);
+	LocalFree(descriptor);
+}
+
 void TestFreshInstallSucceeds() {
 	Fixture f;
 	QString error;
@@ -124,6 +180,7 @@ void TestSnapshotIsReadableByRecoveryTool() {
 	QString error;
 	assert(TakeSnapshot(f.work, f.exe, &error));
 	const auto root = SnapshotRoot(f.work);
+	AssertNativeSnapshotAcl(root);
 	QFile marker(root + QStringLiteral("/.fishgram-snapshots"));
 	assert(marker.open(QIODevice::ReadOnly));
 	assert(marker.readAll() == QByteArray("FishGram snapshots v1\n"));

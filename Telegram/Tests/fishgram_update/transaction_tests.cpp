@@ -45,11 +45,19 @@ void MakeTestPrivateDirectory(const fs::path &path) {
 	CloseHandle(token);
 	LPWSTR sid = nullptr;
 	assert(ConvertSidToStringSidW(reinterpret_cast<TOKEN_USER*>(user.data())->User.Sid, &sid));
-	const auto sddl = std::wstring(L"D:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;FA;;;") + sid + L")";
+	const auto principals = Details::TrustedPrincipals();
+	assert(principals.valid);
+	// An elevated updater must not trust ordinary-user write permissions.
+	// Match that real policy in the synthetic installation as well.
+	const auto sddl = std::wstring(principals.elevated
+		? L"O:BAD:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;GRGX;;;"
+		: L"D:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;FA;;;") + sid + L")";
 	LocalFree(sid);
 	PSECURITY_DESCRIPTOR descriptor = nullptr;
 	assert(ConvertStringSecurityDescriptorToSecurityDescriptorW(sddl.c_str(), SDDL_REVISION_1, &descriptor, nullptr));
-	assert(SetFileSecurityW(path.c_str(), DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION, descriptor));
+	const auto fields = DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION
+		| (principals.elevated ? OWNER_SECURITY_INFORMATION : 0);
+	assert(SetFileSecurityW(path.c_str(), fields, descriptor));
 	LocalFree(descriptor);
 }
 
@@ -121,6 +129,8 @@ void Write(const fs::path &path, const std::string &value) {
 	std::ofstream file(path, std::ios::binary | std::ios::trunc);
 	file.write(value.data(), std::streamsize(value.size()));
 	assert(file.good());
+	file.close();
+	if (Details::TrustedPrincipals().elevated) MakeTestPrivateDirectory(path);
 }
 
 std::string Read(const fs::path &path) {
@@ -170,7 +180,13 @@ void TestPortableWorkingDirectoryInsideInstallation() {
 	fs::create_directories(fixture.work / L"tupdates" / L"temp");
 	Write(fixture.work / L"tdata" / L"map0", "working-account-secret");
 	fixture.Payload(7002009001ULL);
-	assert(Apply(fixture.RequestFor(7002009001ULL)) == Result::Applied);
+	const auto result = Apply(fixture.RequestFor(7002009001ULL));
+	if (result != Result::Applied) {
+		std::cerr << "Portable fixture result=" << int(result)
+			<< " WinError=" << GetLastError()
+			<< " elevated=" << Details::TrustedPrincipals().elevated << '\n';
+	}
+	assert(result == Result::Applied);
 	assert(Read(fixture.work / L"tdata" / L"map0") == "working-account-secret");
 	assert(Read(fixture.install / L"Telegram.exe") == "new-telegram");
 }
