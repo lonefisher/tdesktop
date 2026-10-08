@@ -54,7 +54,28 @@ if (WIN32)
 endif()
 
 include(cmake/generate_update_keys.cmake)
-generate_update_keys(Telegram ${res_loc}/update)
+set(FISHGRAM_UPDATE_TRUST_DIRECTORY "" CACHE PATH "FishGram public root and signed key manifest directory.")
+if (EXISTS "${FISHGRAM_UPDATE_TRUST_DIRECTORY}/root-public.pem"
+    AND EXISTS "${FISHGRAM_UPDATE_TRUST_DIRECTORY}/manifest.min.json"
+    AND EXISTS "${FISHGRAM_UPDATE_TRUST_DIRECTORY}/manifest.sig")
+    file(SHA256 "${FISHGRAM_UPDATE_TRUST_DIRECTORY}/root-public.pem" fishgram_root_hash)
+    file(SHA256 "${res_loc}/update/root-public.pem" official_root_hash)
+    if (fishgram_root_hash STREQUAL official_root_hash)
+        message(FATAL_ERROR "FishGram cannot trust the official Telegram update root.")
+    endif()
+    add_compile_definitions(FISHGRAM_UPDATE_TRUST_CONFIGURED=1)
+    generate_update_keys(Telegram "${FISHGRAM_UPDATE_TRUST_DIRECTORY}")
+else()
+    if (NOT DESKTOP_APP_DISABLE_AUTOUPDATE)
+        message(FATAL_ERROR "FishGram automatic updates require its own public trust bundle.")
+    endif()
+    set(fishgram_empty_trust "${CMAKE_CURRENT_BINARY_DIR}/unconfigured-update-trust")
+    file(MAKE_DIRECTORY "${fishgram_empty_trust}")
+    foreach(trust_file root-public.pem manifest.min.json manifest.sig)
+        file(WRITE "${fishgram_empty_trust}/${trust_file}" "UNCONFIGURED")
+    endforeach()
+    generate_update_keys(Telegram "${fishgram_empty_trust}")
+endif()
 
 if (DESKTOP_APP_TEST_APPS OR DESKTOP_APP_SPECIAL_TARGET)
     include(cmake/test_update_verify.cmake)
@@ -111,6 +132,7 @@ PRIVATE
 
     api/api_restricted_global_search.cpp
     api/api_restricted_global_search.h
+    api/restricted_search_core.h
     api/restricted_search_merge.h
     api/restricted_search_schedule.h
     api/api_attached_stickers.cpp
@@ -601,6 +623,9 @@ PRIVATE
     core/ui_integration.cpp
     core/ui_integration.h
     core/update_channel.h
+    core/fishgram_update_policy.h
+    core/fishgram_update_feed.h
+    core/fishgram_update_feed.cpp
     core/update_checker.cpp
     core/update_checker.h
     core/update_keys.cpp
@@ -2526,6 +2551,7 @@ endif()
 target_prepare_qrc(Telegram)
 
 if (NOT DESKTOP_APP_DISABLE_AUTOUPDATE AND NOT build_macstore AND NOT build_winstore)
+    target_sources(Telegram PRIVATE ${src_loc}/core/fishgram_update_payload.cpp ${src_loc}/core/fishgram_update_payload.h)
     add_executable(Updater WIN32)
     init_non_host_target(Updater)
 
@@ -2534,6 +2560,8 @@ if (NOT DESKTOP_APP_DISABLE_AUTOUPDATE AND NOT build_macstore AND NOT build_wins
     nice_target_sources(Updater ${src_loc}
     PRIVATE
         _other/updater_win.cpp
+        core/fishgram_data_snapshot.cpp
+        core/fishgram_data_snapshot.h
         _other/updater_linux.cpp
         _other/updater_osx.m
         _other/updater.h
@@ -2544,6 +2572,12 @@ if (NOT DESKTOP_APP_DISABLE_AUTOUPDATE AND NOT build_macstore AND NOT build_wins
     )
 
     if (WIN32)
+        target_sources(Updater PRIVATE ${src_loc}/core/fishgram_update_payload.cpp
+            ${src_loc}/core/update_verify.cpp ${src_loc}/core/update_keys.cpp)
+        target_include_directories(Updater PRIVATE ${src_loc} ${CMAKE_CURRENT_BINARY_DIR}/gen)
+        add_dependencies(Updater Telegram_update_keys)
+        target_link_libraries(Updater PRIVATE desktop-app::external_qt
+            desktop-app::external_auto_updates desktop-app::external_openssl)
         get_filename_component(lib_base_loc lib_base REALPATH)
         nice_target_sources(Updater ${lib_base_loc}
         PRIVATE

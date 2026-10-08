@@ -24,6 +24,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "core/file_utilities.h"
 #include "core/launcher.h"
 #include "core/update_checker.h"
+#include "core/update_failure.h"
 #include "data/data_auto_download.h"
 #include "data/data_session.h"
 #include "export/export_manager.h"
@@ -85,6 +86,32 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 namespace Settings {
 namespace {
+
+[[nodiscard]] QString UpdateFailureText(Core::UpdateFailure failure) {
+	switch (failure) {
+	case Core::UpdateFailure::NotConfigured:
+		return tr::lng_settings_update_error_not_configured(tr::now);
+	case Core::UpdateFailure::Network:
+		return tr::lng_settings_update_error_network(tr::now);
+	case Core::UpdateFailure::Timeout:
+		return tr::lng_settings_update_error_timeout(tr::now);
+	case Core::UpdateFailure::Manifest:
+		return tr::lng_settings_update_error_manifest(tr::now);
+	case Core::UpdateFailure::Index:
+		return tr::lng_settings_update_error_index(tr::now);
+	case Core::UpdateFailure::Signature:
+		return tr::lng_settings_update_error_signature(tr::now);
+	case Core::UpdateFailure::Download:
+		return tr::lng_settings_update_error_download(tr::now);
+	case Core::UpdateFailure::DownloadValidation:
+		return tr::lng_settings_update_error_validation(tr::now);
+	case Core::UpdateFailure::Staging:
+		return tr::lng_settings_update_error_staging(tr::now);
+	case Core::UpdateFailure::None:
+		return tr::lng_settings_update_fail(tr::now);
+	}
+	return tr::lng_settings_update_fail(tr::now);
+}
 
 using namespace Builder;
 
@@ -1172,6 +1199,11 @@ void BuildUpdateSection(SectionBuilder &builder, bool atTop) {
 		const auto setDefaultStatus = [=](
 				const Core::UpdateChecker &checker) {
 			using State = Core::UpdateChecker::State;
+			if (const auto failure = checker.failureReason();
+				failure != Core::UpdateFailure::None) {
+				texts->fire(UpdateFailureText(failure));
+				return;
+			}
 			const auto state = checker.state();
 			switch (state) {
 			case State::Download:
@@ -1242,7 +1274,7 @@ void BuildUpdateSection(SectionBuilder &builder, bool atTop) {
 		}, options->lifetime());
 		checker.failed() | rpl::on_next([=] {
 			options->setAttribute(Qt::WA_TransparentForMouseEvents, false);
-			texts->fire(tr::lng_settings_update_fail(tr::now));
+			texts->fire(UpdateFailureText(checker.failureReason()));
 			downloading->fire(false);
 		}, options->lifetime());
 		checker.ready() | rpl::on_next([=] {
@@ -1524,6 +1556,11 @@ void SetupUpdate(not_null<Ui::VerticalLayout*> container) {
 	};
 	const auto setDefaultStatus = [=](const Core::UpdateChecker &checker) {
 		using State = Core::UpdateChecker::State;
+		if (const auto failure = checker.failureReason();
+			failure != Core::UpdateFailure::None) {
+			texts->fire(UpdateFailureText(failure));
+			return;
+		}
 		const auto state = checker.state();
 		switch (state) {
 		case State::Download:
@@ -1605,7 +1642,7 @@ void SetupUpdate(not_null<Ui::VerticalLayout*> container) {
 	}, options->lifetime());
 	checker.failed() | rpl::on_next([=] {
 		options->setAttribute(Qt::WA_TransparentForMouseEvents, false);
-		texts->fire(tr::lng_settings_update_fail(tr::now));
+		texts->fire(UpdateFailureText(checker.failureReason()));
 		downloading->fire(false);
 	}, options->lifetime());
 	checker.ready() | rpl::on_next([=] {

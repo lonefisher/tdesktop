@@ -12,21 +12,33 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 namespace Core::Updates {
 
 QByteArray RootPublicKeyPem() {
+#ifndef FISHGRAM_UPDATE_TRUST_CONFIGURED
+	return {};
+#else
 	return QByteArray::fromRawData(
 		reinterpret_cast<const char*>(details::kRootPublicKeyPem),
 		sizeof(details::kRootPublicKeyPem));
+#endif
 }
 
 QByteArray EmbeddedManifest() {
+#ifndef FISHGRAM_UPDATE_TRUST_CONFIGURED
+	return {};
+#else
 	return QByteArray::fromRawData(
 		reinterpret_cast<const char*>(details::kEmbeddedManifest),
 		sizeof(details::kEmbeddedManifest));
+#endif
 }
 
 QByteArray EmbeddedManifestSignature() {
+#ifndef FISHGRAM_UPDATE_TRUST_CONFIGURED
+	return {};
+#else
 	return QByteArray::fromRawData(
 		reinterpret_cast<const char*>(details::kEmbeddedManifestSig),
 		sizeof(details::kEmbeddedManifestSig));
+#endif
 }
 
 } // namespace Core::Updates

@@ -6,6 +6,7 @@ For license and copyright information please follow this link:
 https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "platform/win/windows_app_user_model_id.h"
+#include "platform/win/windows_app_user_model_identity.h"
 
 #include "platform/win/windows_dlls.h"
 #include "platform/win/windows_toast_activator.h"
@@ -26,9 +27,9 @@ const PROPERTYKEY pkey_AppUserModel_StartPinOption = { { 0x9F4C2855, 0x9F79, 0x4
 const PROPERTYKEY pkey_AppUserModel_ToastActivator = { { 0x9F4C2855, 0x9F79, 0x4B39, { 0xA8, 0xD0, 0xE1, 0xD4, 0x2D, 0xE1, 0xD5, 0xF3 } }, 26 };
 
 #ifdef OS_WIN_STORE
-const WCHAR AppUserModelIdBase[] = L"Telegram.TelegramDesktop.Store";
+const std::wstring AppUserModelIdBase = L"Telegram.TelegramDesktop.Store";
 #else // OS_WIN_STORE
-const WCHAR AppUserModelIdBase[] = L"Telegram.TelegramDesktop";
+const auto AppUserModelIdBase = WindowsAppIdentity::AppUserModelIdBase();
 #endif // OS_WIN_STORE
 
 [[nodiscard]] QString PinnedIconsPath() {
@@ -213,8 +214,8 @@ void CleanupShortcut() {
 		return;
 	}
 
-	QString path = systemShortcutPath() + u"Telegram.lnk"_q;
-	std::wstring p = QDir::toNativeSeparators(path).toStdWString();
+	const auto p = WindowsAppIdentity::ShortcutPath(
+		QDir::toNativeSeparators(systemShortcutPath()).toStdWString());
 
 	DWORD attributes = GetFileAttributes(p.c_str());
 	if (attributes >= 0xFFFFFFF) return; // file does not exist
@@ -238,7 +239,7 @@ void CleanupShortcut() {
 	if (!SUCCEEDED(hr)) return;
 
 	if (GetUniqueFileId(szGotPath) == myid) {
-		QFile().remove(path);
+		QFile().remove(QString::fromStdWString(p));
 	}
 }
 
@@ -345,10 +346,11 @@ bool checkInstalled(QString path = {}) {
 		}
 	}
 
-	const auto installed = u"Telegram Desktop/Telegram.lnk"_q;
-	const auto old = u"Telegram Win (Unofficial)/Telegram.lnk"_q;
-	return validateShortcutAt(path + installed)
-		|| validateShortcutAt(path + old);
+	const auto installed = WindowsAppIdentity::InstalledShortcutRelativePath();
+	return validateShortcutAt(QString::fromStdWString(
+		WindowsAppIdentity::ShortcutPath(
+			QDir::toNativeSeparators(path).toStdWString(),
+			installed)));
 }
 
 bool ValidateShortcut() {
@@ -358,7 +360,8 @@ bool ValidateShortcut() {
 	}
 
 	if (cAlphaVersion()) {
-		path += u"TelegramAlpha.lnk"_q;
+		path += QString::fromStdWString(
+			WindowsAppIdentity::ShortcutFileName(true));
 		if (validateShortcutAt(path)) {
 			return true;
 		}
@@ -367,7 +370,8 @@ bool ValidateShortcut() {
 			return true;
 		}
 
-		path += u"Telegram.lnk"_q;
+		path += QString::fromStdWString(
+			WindowsAppIdentity::ShortcutFileName());
 		if (validateShortcutAt(path)) {
 			return true;
 		}
@@ -494,7 +498,8 @@ const std::wstring &Id() {
 	}
 	static const auto PortableId = [] {
 		const auto h = Core::Launcher::Instance().instanceHash();
-		return BaseId + L'.' + std::wstring(h.begin(), h.end());
+		return WindowsAppIdentity::PortableAppUserModelId(
+			std::wstring(h.begin(), h.end()));
 	}();
 	return PortableId;
 }

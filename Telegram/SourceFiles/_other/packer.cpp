@@ -8,6 +8,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "packer.h"
 
 #include "core/update_verify.h"
+#include "core/fishgram_update_policy.h"
+#include <set>
 
 #include <QtCore/QDateTime>
 
@@ -45,18 +47,11 @@ w/CVnbwQOw0g5GBwwFV3r0uTTvy44xx8XXxk+Qknu4eBCsmrAFNnAgMBAAE=\n\
 -----END RSA PUBLIC KEY-----\
 ";
 
-#ifndef PACKER_DISABLE_PRIVATE
-extern const char *PrivateKey;
-extern const char *PrivateBetaKey;
-#include "../../../../DesktopPrivate/packer_private.h" // RSA PRIVATE KEYS for update signing
-#include "../../../../DesktopPrivate/alpha_private.h" // private key for alpha version file generation
-#else // PACKER_DISABLE_PRIVATE
-// V2 packing needs no DesktopPrivate keys: the empty stubs make the v1
-// path fail with a clear error instead of signing with a wrong key.
+// FishGram's keys are supplied explicitly through its v2 signing process.
+// Never load Telegram Desktop's private RSA/alpha key headers.
 const char *PrivateKey = "";
 const char *PrivateBetaKey = "";
 static const char *AlphaPrivateKey = "";
-#endif // PACKER_DISABLE_PRIVATE
 
 QString countAlphaVersionSignature(quint64 version);
 
@@ -189,8 +184,8 @@ void AppendLeU64(QByteArray &to, quint64 value) {
 // suffix the installers and portable archives carry after their version.
 [[nodiscard]] QString V2NameSuffix(Channel channel, quint32 counter) {
 	switch (channel) {
-	case Channel::Stable: return QString();
-	case Channel::Beta: return QString("-beta");
+	case Channel::Stable: return QString("-r%1").arg(counter);
+	case Channel::Beta: return QString("-r%1-beta").arg(counter);
 	case Channel::CanaryPublic: return QString("-canary-%1").arg(counter);
 	case Channel::CanaryPrivate:
 		return QString("-canary-%1-private").arg(counter);
@@ -202,7 +197,7 @@ void AppendLeU64(QByteArray &to, quint64 value) {
 		Channel channel,
 		quint32 base,
 		quint32 counter) {
-	return QString("td-update-%1-%2-%3%4"
+	return QString("fishgram-update-%1-%2-%3%4"
 	).arg(QString::fromLatin1(Core::Updates::OsName(V2Target.os))
 	).arg(QString::fromLatin1(Core::Updates::ArchName(V2Target.arch))
 	).arg(base
@@ -242,7 +237,7 @@ struct V2Keys {
 // the approaching dates are surfaced, ahead of the moment a channel key
 // expires and packing starts failing verification.
 void ReportExpiry(const Core::Updates::Manifest &manifest, Channel channel) {
-	constexpr auto kWarnDays = 90;
+	constexpr auto kWarnDays = 45;
 	const auto now = QDateTime::currentSecsSinceEpoch();
 	const auto report = [&](const QByteArray &what, qint64 expires) {
 		if (!expires) {
@@ -377,7 +372,7 @@ void ReportExpiry(const Core::Updates::Manifest &manifest, Channel channel) {
 		const QString &path,
 		const QByteArray &content) {
 	QFile file(path);
-	if (!file.open(QIODevice::WriteOnly)
+	if (!file.open(QIODevice::WriteOnly | QIODevice::NewOnly)
 		|| file.write(content) != content.size()) {
 		cout << "Can't write '" << path.toUtf8().constData() << "'..\n";
 		return false;
@@ -601,7 +596,9 @@ int main(int argc, char *argv[])
 				return -1;
 			}
 		} else if (string("-counter") == argv[i] && i + 1 < argc) {
-			V2Counter = QString(argv[i + 1]).toUInt();
+			const auto counter = Core::FishGramUpdates::ParseVersion(argv[i + 1]);
+			if (!counter || *counter > 0xFFFFFFFFULL) return -1;
+			V2Counter = quint32(*counter);
 		} else if (string("-keys-loc") == argv[i] && i + 1 < argc) {
 			V2KeysLoc = QString(argv[i + 1]);
 		} else if (string("-local-key") == argv[i] && i + 1 < argc) {
@@ -679,8 +676,8 @@ int main(int argc, char *argv[])
 		} else if (V2KeysLoc.isEmpty()) {
 			cout << "The -keys-loc param is required for -channel packing!\n";
 			return -1;
-		} else if (canary != (V2Counter > 0)) {
-			cout << "Canary channels require a positive -counter, others require none!\n";
+		} else if (canary || !V2Counter) {
+			cout << "FishGram stable/beta updates require a positive revision -counter!\n";
 			return -1;
 		} else if (!V2EmbedSignatures.empty()) {
 			cout << "The -embed-signatures param requires -unsigned!\n";
@@ -696,6 +693,10 @@ int main(int argc, char *argv[])
 		|| !V2SigningInputFile.isEmpty()
 		|| !V2EmbedSignatures.empty()) {
 		cout << "The v2 params require the -channel param!\n";
+		return -1;
+	}
+	if (!V2Channel && V2UnsignedFile.isEmpty()) {
+		cout << "FishGram accepts v2-only packing. Specify -channel stable/beta and -counter revision.\n";
 		return -1;
 	}
 
@@ -745,6 +746,20 @@ int main(int argc, char *argv[])
 			return -1;
 		}
 	}
+
+	std::set<QString> payloadNames;
+	for (const auto &info : files) {
+		const auto relative = info.canonicalFilePath().mid(remove.size());
+		const auto encoded = relative.toUtf8();
+		if (info.isSymLink() || !Core::FishGramUpdates::IsSafePayloadName(
+			std::string_view(encoded.constData(), std::size_t(encoded.size())))
+			|| !payloadNames.insert(relative.toLower()).second) {
+			cout << "Unsafe or duplicate FishGram payload file.\n";
+			return -1;
+		}
+	}
+	if (!payloadNames.contains(QStringLiteral("telegram.exe"))
+		|| !payloadNames.contains(QStringLiteral("updater.exe"))) return -1;
 
 	QByteArray result;
 	{

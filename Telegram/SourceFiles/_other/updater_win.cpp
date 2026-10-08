@@ -8,10 +8,23 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "updater.h"
 
 #include "base/platform/win/base_windows_safe_library.h"
+#include "core/version.h"
+#include "_other/fishgram_update_transaction.h"
+#include "_other/fishgram_update_restart.h"
+#include "core/update_keys.h"
+#include "core/update_verify.h"
+#include "core/fishgram_update_payload.h"
+#include "core/fishgram_data_snapshot.h"
+#include <QtCore/QFile>
+#include <QtCore/QDateTime>
+
+#include <cstdint>
 
 bool _debug = false;
 
 wstring updaterName, updaterDir, updateTo, exeName, customWorkingDir, customKeyFile;
+std::uint64_t fromVersion = 0;
+bool installBeta = false;
 
 bool equal(const wstring &a, const wstring &b) {
 	return !_wcsicmp(a.c_str(), b.c_str());
@@ -96,240 +109,185 @@ void writeLog(const wstring &msg) {
 	}
 }
 
-void fullClearPath(const wstring &dir) {
-	WCHAR path[4096];
-	memcpy(path, dir.c_str(), (dir.size() + 1) * sizeof(WCHAR));
-	path[dir.size() + 1] = 0;
-	writeLog(L"Fully clearing path '" + dir + L"'..");
-	SHFILEOPSTRUCT file_op = {
-		NULL,
-		FO_DELETE,
-		path,
-		L"",
-		FOF_NOCONFIRMATION |
-		FOF_NOERRORUI |
-		FOF_SILENT,
-		false,
-		0,
-		L""
-	};
-	int res = SHFileOperation(&file_op);
-	if (res) writeLog(L"Error: failed to clear path! :(");
-}
+namespace FishGramTransaction = Core::FishGramUpdates::WindowsTransaction;
 
-void delFolder() {
-	wstring delPathOld = L"tupdates\\ready", delPath = L"tupdates\\temp", delFolder = L"tupdates";
-	fullClearPath(delPathOld);
-	fullClearPath(delPath);
-	RemoveDirectory(delFolder.c_str());
+const WCHAR *updateResultMessage(FishGramTransaction::Result result) {
+	switch (result) {
+	case FishGramTransaction::Result::Busy:
+		return L"Another update is already running.";
+	case FishGramTransaction::Result::InvalidInstallPath:
+		return L"The installation folder is invalid.";
+	case FishGramTransaction::Result::InvalidWorkPath:
+		return L"The update work folder is invalid.";
+	case FishGramTransaction::Result::InvalidPayload:
+		return L"The update package contains invalid files.";
+	case FishGramTransaction::Result::InvalidReadyMarker:
+		return L"The update marker is missing or invalid.";
+	case FishGramTransaction::Result::VersionMismatch:
+		return L"The update package is for a different FishGram build.";
+	case FishGramTransaction::Result::ChannelMismatch:
+		return L"The update package is for a different update channel.";
+	case FishGramTransaction::Result::AppRunning:
+		return L"Close FishGram before installing this update.";
+	case FishGramTransaction::Result::InsufficientSpace:
+		return L"There is not enough free space to install this update.";
+	case FishGramTransaction::Result::WriteDenied:
+		return L"The installation or update files failed permission and safety checks. Use a private writable installation folder.";
+	case FishGramTransaction::Result::FileInUse:
+		return L"An installed program file is in use.";
+	case FishGramTransaction::Result::CopyFailed:
+		return L"Copying the update failed. The previous program was restored.";
+	case FishGramTransaction::Result::RecoveryFailed:
+		return L"The previous program could not be fully restored. Use the recovery backup before restarting FishGram.";
+	case FishGramTransaction::Result::IoError:
+		return L"The update transaction could not be saved.";
+	case FishGramTransaction::Result::DataSnapshotFailed:
+		return L"The account-data snapshot could not be verified. FishGram kept the previous program and account data. Close all instances and retry.";
+	case FishGramTransaction::Result::Applied:
+	case FishGramTransaction::Result::NoUpdate:
+	case FishGramTransaction::Result::Recovered:
+	case FishGramTransaction::Result::NoRecoveryNeeded:
+		return L"";
+	}
+	return L"The update failed safely.";
 }
-
-DWORD versionNum = 0, versionLen = 0, readLen = 0;
-WCHAR versionStr[32] = { 0 };
 
 bool update() {
-	writeLog(L"Update started..");
-
-	wstring updDir = L"tupdates\\temp", readyFilePath = L"tupdates\\temp\\ready", tdataDir = L"tupdates\\temp\\tdata";
-	{
-		HANDLE readyFile = CreateFile(readyFilePath.c_str(), GENERIC_READ, FILE_SHARE_READ, 0, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, 0);
-		if (readyFile != INVALID_HANDLE_VALUE) {
-			CloseHandle(readyFile);
-		} else {
-			updDir = L"tupdates\\ready"; // old
-			tdataDir = L"tupdates\\ready\\tdata";
-		}
+	writeLog(L"Transactional update started.");
+	if (updateTo.empty()) {
+		updateError(L"No installation folder was provided.", ERROR_INVALID_PARAMETER);
+		return false;
 	}
-
-	HANDLE versionFile = CreateFile((tdataDir + L"\\version").c_str(), GENERIC_READ, FILE_SHARE_READ, 0, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, 0);
-	if (versionFile != INVALID_HANDLE_VALUE) {
-		if (!ReadFile(versionFile, &versionNum, sizeof(DWORD), &readLen, NULL) || readLen != sizeof(DWORD)) {
-			versionNum = 0;
-		} else {
-			if (versionNum == 0x7FFFFFFF) { // alpha version
-
-			} else if (versionNum == 0x7FFFFFFE) { // v2 canary version
-
-			} else if (!ReadFile(versionFile, &versionLen, sizeof(DWORD), &readLen, NULL) || readLen != sizeof(DWORD) || versionLen > 63) {
-				versionNum = 0;
-			} else if (!ReadFile(versionFile, versionStr, versionLen, &readLen, NULL) || readLen != versionLen) {
-				versionNum = 0;
-			}
-		}
-		CloseHandle(versionFile);
-		writeLog(L"Version file read.");
-	} else {
-		writeLog(L"Could not open version file to update registry :(");
-	}
-
-	deque<wstring> dirs;
-	dirs.push_back(updDir);
-
-	deque<wstring> from, to, forcedirs;
-
-	do {
-		wstring dir = dirs.front();
-		dirs.pop_front();
-
-		wstring toDir = updateTo;
-		if (dir.size() > updDir.size() + 1) {
-			toDir += (dir.substr(updDir.size() + 1) + L"\\");
-			forcedirs.push_back(toDir);
-			writeLog(L"Parsing dir '" + toDir + L"' in update tree..");
-		}
-
-		WIN32_FIND_DATA findData;
-		HANDLE findHandle = FindFirstFileEx((dir + L"\\*").c_str(), FindExInfoStandard, &findData, FindExSearchNameMatch, 0, 0);
-		if (findHandle == INVALID_HANDLE_VALUE) {
-			DWORD errorCode = GetLastError();
-			if (errorCode == ERROR_PATH_NOT_FOUND) { // no update is ready
-				return true;
-			}
-			writeLog(L"Error: failed to find update files :(");
-			updateError(L"Failed to find update files", errorCode);
-			delFolder();
+	wstring workDir = customWorkingDir;
+	if (workDir.empty()) {
+		WCHAR currentDirectory[32768] = {};
+		const auto length = GetCurrentDirectoryW(DWORD(std::size(currentDirectory)), currentDirectory);
+		if (!length || length >= std::size(currentDirectory)) {
+			updateError(L"Failed to determine the update work folder", GetLastError());
 			return false;
 		}
-
-		do {
-			wstring fname = dir + L"\\" + findData.cFileName;
-			if (fname.substr(0, tdataDir.size()) == tdataDir && (fname.size() <= tdataDir.size() || fname.at(tdataDir.size()) == '/')) {
-				writeLog(L"Skipped 'tdata' path '" + fname + L"'");
-			} else if (findData.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
-				if (findData.cFileName != wstring(L".") && findData.cFileName != wstring(L"..")) {
-					dirs.push_back(fname);
-					writeLog(L"Added dir '" + fname + L"' in update tree..");
-				}
-			} else {
-				wstring tofname = updateTo + fname.substr(updDir.size() + 1);
-				if (equal(tofname, updaterName)) { // bad update - has Updater.exe - delete all dir
-					writeLog(L"Error: bad update, has Updater.exe! '" + tofname + L"' equal '" + updaterName + L"'");
-					delFolder();
-					return false;
-				} else if (equal(tofname, updateTo + L"Telegram.exe") && exeName != L"Telegram.exe") {
-					wstring fullBinaryPath = updateTo + exeName;
-					writeLog(L"Target binary found: '" + tofname + L"', changing to '" + fullBinaryPath + L"'");
-					tofname = fullBinaryPath;
-				}
-				if (equal(fname, readyFilePath)) {
-					writeLog(L"Skipped ready file '" + fname + L"'");
-				} else {
-					from.push_back(fname);
-					to.push_back(tofname);
-					writeLog(L"Added file '" + fname + L"' to be copied to '" + tofname + L"'");
-				}
-			}
-		} while (FindNextFile(findHandle, &findData));
-		DWORD errorCode = GetLastError();
-		if (errorCode && errorCode != ERROR_NO_MORE_FILES) { // everything is found
-			writeLog(L"Error: failed to find next update file :(");
-			updateError(L"Failed to find next update file", errorCode);
-			delFolder();
-			return false;
-		}
-		FindClose(findHandle);
-	} while (!dirs.empty());
-
-	for (size_t i = 0; i < forcedirs.size(); ++i) {
-		wstring forcedir = forcedirs[i];
-		writeLog(L"Forcing dir '" + forcedir + L"'..");
-		if (!forcedir.empty() && !CreateDirectory(forcedir.c_str(), NULL)) {
-			DWORD errorCode = GetLastError();
-			if (errorCode && errorCode != ERROR_ALREADY_EXISTS) {
-				writeLog(L"Error: failed to create dir '" + forcedir + L"'..");
-				updateError(L"Failed to create directory", errorCode);
-				delFolder();
-				return false;
-			}
-			writeLog(L"Already exists!");
-		}
+		workDir = currentDirectory;
 	}
-
-	for (size_t i = 0; i < from.size(); ++i) {
-		wstring fname = from[i], tofname = to[i];
-		BOOL copyResult;
-		do {
-			writeLog(L"Copying file '" + fname + L"' to '" + tofname + L"'..");
-			int copyTries = 0;
-			do {
-				copyResult = CopyFile(fname.c_str(), tofname.c_str(), FALSE);
-				if (!copyResult) {
-					++copyTries;
-					Sleep(100);
-				} else {
-					break;
-				}
-			} while (copyTries < 100);
-			if (!copyResult) {
-				writeLog(L"Error: failed to copy, asking to retry..");
-				WCHAR errMsg[2048];
-				wsprintf(errMsg, L"Failed to update Telegram :(\n%s is not accessible.", tofname.c_str());
-				if (MessageBox(0, errMsg, L"Update error!", MB_ICONERROR | MB_RETRYCANCEL) != IDRETRY) {
-					delFolder();
-					return false;
-				}
-			}
-		} while (!copyResult);
+	auto request = FishGramTransaction::Request();
+	request.installDir = updateTo;
+	request.workDir = workDir;
+	request.executableName = L"Telegram.exe";
+	const auto ownVersion = (std::uint64_t(FISHGRAM_BASE_VERSION) << 32)
+		| std::uint64_t(FISHGRAM_REVISION);
+#ifndef TDESKTOP_UPDATE_CHANNEL
+#define TDESKTOP_UPDATE_CHANNEL 0
+#endif // TDESKTOP_UPDATE_CHANNEL
+	const auto read = [](const wstring &path, qint64 limit) {
+		QFile file(QString::fromStdWString(path));
+		return file.open(QIODevice::ReadOnly) && file.size() > 0 && file.size() <= limit
+			? file.readAll() : QByteArray();
+	};
+	const auto root = Core::Updates::RootPublicKeyPem();
+	const auto embedded = Core::Updates::ParseVerifiedManifest(
+		Core::Updates::EmbeddedManifest(), Core::Updates::EmbeddedManifestSignature(), root);
+	const auto held = Core::FishGramUpdates::ReadVerifiedTrustRecord(
+		read(FishGramTransaction::Details::Join(updateTo, L".fishgram-update\\held-trust"), 1024 * 1024), root);
+	if (!embedded || !held || held->version < embedded->version
+		|| (held->version == embedded->version && held->bytes != embedded->bytes)) {
+		updateError(L"The FishGram signing-key authorization is missing or invalid.", ERROR_INVALID_DATA);
+		return false;
 	}
-
-	writeLog(L"Update succeed! Clearing folder..");
-	delFolder();
-	return true;
+	const auto running = fromVersion > ownVersion ? fromVersion : ownVersion;
+	const auto packageBytes = read(FishGramTransaction::Details::Join(workDir, L"tupdates\\package.v2"), Core::Updates::kMaxPayloadSize);
+	const auto verified = Core::Updates::VerifyUpdate(
+		packageBytes,
+		Core::Updates::Channel(TDESKTOP_UPDATE_CHANNEL), installBeta,
+		{ Core::Updates::Os::Windows, Core::Updates::Arch::X64 }, running,
+		held, root, QDateTime::currentSecsSinceEpoch());
+	const auto payload = verified ? Core::FishGramUpdates::DecodeVerifiedPayload(*verified) : std::nullopt;
+	if (!payload) {
+		updateError(L"The update failed FishGram signature, version, platform or payload validation.", ERROR_INVALID_DATA);
+		return false;
+	}
+	request.runningVersion = payload->version;
+	request.signedChannel = std::uint32_t(payload->channel);
+	if ((payload->version >> 32) != (running >> 32)) {
+		request.beforeProgramReplace = [&] {
+			return Core::FishGramUpdates::SnapshotBeforeBaselineUpdate(
+				QString::fromStdWString(workDir),
+				QString::fromStdWString(FishGramTransaction::Details::Join(updateTo, L"Telegram.exe")),
+				running);
+		};
+	}
+	request.authorize = [&] {
+		// Re-read the installation's newest root-signed authorization under the
+		// same install lock used by the client when persisting a newer manifest.
+		const auto current = Core::FishGramUpdates::ReadVerifiedTrustRecord(
+			read(FishGramTransaction::Details::Join(updateTo, L".fishgram-update\\held-trust"), 1024 * 1024), root);
+		return current && current->version >= held->version
+			&& (current->version != held->version || current->bytes == held->bytes)
+			&& bool(Core::Updates::VerifyUpdate(packageBytes,
+				Core::Updates::Channel(TDESKTOP_UPDATE_CHANNEL), installBeta,
+				{ Core::Updates::Os::Windows, Core::Updates::Arch::X64 }, running,
+				current, root, QDateTime::currentSecsSinceEpoch()));
+	};
+	for (const auto &[name, bytes] : payload->files) {
+		const auto begin = reinterpret_cast<const unsigned char*>(bytes.constData());
+		request.authenticatedFiles.push_back({ name.toStdWString(), {begin, begin + bytes.size()} });
+	}
+	const auto result = FishGramTransaction::Apply(request);
+	writeLog(L"Transactional update result: " + std::to_wstring(int(result)));
+	if (result == FishGramTransaction::Result::Applied
+		|| result == FishGramTransaction::Result::NoUpdate) {
+		return true;
+	}
+	updateError(updateResultMessage(result), DWORD(result));
+	return false;
 }
 
-void updateRegistry() {
-	if (versionNum && versionNum != 0x7FFFFFFF && versionNum != 0x7FFFFFFE) {
-		writeLog(L"Updating registry..");
-		versionStr[versionLen / 2] = 0;
-		HKEY rkey;
-		LSTATUS status = RegOpenKeyEx(HKEY_CURRENT_USER, L"Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\{53F49750-6209-4FBF-9CA8-7A333C87D1ED}_is1", 0, KEY_QUERY_VALUE | KEY_SET_VALUE, &rkey);
-		if (status == ERROR_SUCCESS) {
-			writeLog(L"Checking registry install location..");
-			static const int bufSize = 4096;
-			DWORD locationType, locationSize = bufSize * 2;
-			WCHAR locationStr[bufSize], exp[bufSize];
-			if (RegQueryValueEx(rkey, L"InstallLocation", 0, &locationType, (BYTE*)locationStr, &locationSize) == ERROR_SUCCESS) {
-				locationSize /= 2;
-				if (locationStr[locationSize - 1]) {
-					locationStr[locationSize++] = 0;
-				}
-				if (locationType == REG_EXPAND_SZ) {
-					DWORD copy = ExpandEnvironmentStrings(locationStr, exp, bufSize);
-					if (copy <= bufSize) {
-						memcpy(locationStr, exp, copy * sizeof(WCHAR));
-					}
-				}
-				if (locationType == REG_EXPAND_SZ || locationType == REG_SZ) {
-					if (PathCanonicalize(exp, locationStr)) {
-						memcpy(locationStr, exp, bufSize * sizeof(WCHAR));
-						if (GetFullPathName(L".", bufSize, exp, 0) < bufSize) {
-							wstring installpath = locationStr, mypath = exp;
-							if (installpath == mypath + L"\\" || true) { // always update reg info, if we found it
-								WCHAR nameStr[bufSize], dateStr[bufSize], publisherStr[bufSize], icongroupStr[bufSize];
-								SYSTEMTIME stLocalTime;
-								GetLocalTime(&stLocalTime);
-								RegSetValueEx(rkey, L"DisplayVersion", 0, REG_SZ, (const BYTE*)versionStr, ((versionLen / 2) + 1) * sizeof(WCHAR));
-								wsprintf(nameStr, L"Telegram Desktop");
-								RegSetValueEx(rkey, L"DisplayName", 0, REG_SZ, (const BYTE*)nameStr, (wcslen(nameStr) + 1) * sizeof(WCHAR));
-								wsprintf(publisherStr, L"Telegram FZ-LLC");
-								RegSetValueEx(rkey, L"Publisher", 0, REG_SZ, (const BYTE*)publisherStr, (wcslen(publisherStr) + 1) * sizeof(WCHAR));
-								wsprintf(icongroupStr, L"Telegram Desktop");
-								RegSetValueEx(rkey, L"Inno Setup: Icon Group", 0, REG_SZ, (const BYTE*)icongroupStr, (wcslen(icongroupStr) + 1) * sizeof(WCHAR));
-								wsprintf(dateStr, L"%04d%02d%02d", stLocalTime.wYear, stLocalTime.wMonth, stLocalTime.wDay);
-								RegSetValueEx(rkey, L"InstallDate", 0, REG_SZ, (const BYTE*)dateStr, (wcslen(dateStr) + 1) * sizeof(WCHAR));
-
-								const WCHAR *appURL = L"https://desktop.telegram.org";
-								RegSetValueEx(rkey, L"HelpLink", 0, REG_SZ, (const BYTE*)appURL, (wcslen(appURL) + 1) * sizeof(WCHAR));
-								RegSetValueEx(rkey, L"URLInfoAbout", 0, REG_SZ, (const BYTE*)appURL, (wcslen(appURL) + 1) * sizeof(WCHAR));
-								RegSetValueEx(rkey, L"URLUpdateInfo", 0, REG_SZ, (const BYTE*)appURL, (wcslen(appURL) + 1) * sizeof(WCHAR));
-							}
-						}
-					}
-				}
-			}
-			RegCloseKey(rkey);
+bool launchUnelevated(const wstring &executable, const wstring &arguments) {
+	const auto shell = GetShellWindow();
+	DWORD shellPid = 0;
+	if (!shell || !GetWindowThreadProcessId(shell, &shellPid)) return false;
+	const auto process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, shellPid);
+	if (!process) return false;
+	HANDLE shellToken = nullptr, currentToken = nullptr, primary = nullptr;
+	bool okay = OpenProcessToken(process, TOKEN_QUERY | TOKEN_DUPLICATE, &shellToken)
+		&& OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &currentToken);
+	CloseHandle(process);
+	const auto readToken = [](HANDLE token, TOKEN_INFORMATION_CLASS kind) {
+		DWORD size = 0;
+		GetTokenInformation(token, kind, nullptr, 0, &size);
+		std::vector<unsigned char> bytes(size);
+		return size && GetTokenInformation(token, kind, bytes.data(), size, &size)
+			? bytes : std::vector<unsigned char>();
+	};
+	if (okay) {
+		const auto shellUser = readToken(shellToken, TokenUser);
+		const auto ownUser = readToken(currentToken, TokenUser);
+		const auto integrity = readToken(shellToken, TokenIntegrityLevel);
+		TOKEN_ELEVATION elevation = {};
+		DWORD length = 0;
+		okay = !shellUser.empty() && !ownUser.empty() && !integrity.empty()
+			&& EqualSid(reinterpret_cast<const TOKEN_USER*>(shellUser.data())->User.Sid,
+				reinterpret_cast<const TOKEN_USER*>(ownUser.data())->User.Sid)
+			&& GetTokenInformation(shellToken, TokenElevation, &elevation, sizeof(elevation), &length)
+			&& !elevation.TokenIsElevated;
+		if (okay) {
+			const auto sid = reinterpret_cast<const TOKEN_MANDATORY_LABEL*>(integrity.data())->Label.Sid;
+			const auto count = *GetSidSubAuthorityCount(sid);
+			okay = count && *GetSidSubAuthority(sid, count - 1) == SECURITY_MANDATORY_MEDIUM_RID;
 		}
 	}
+	if (okay) okay = DuplicateTokenEx(shellToken, MAXIMUM_ALLOWED, nullptr,
+		SecurityImpersonation, TokenPrimary, &primary);
+	if (currentToken) CloseHandle(currentToken);
+	if (shellToken) CloseHandle(shellToken);
+	if (!okay) return false;
+	wstring command = L"\"" + executable + L"\" " + arguments;
+	STARTUPINFOW startup = { sizeof(startup) };
+	startup.lpDesktop = const_cast<wchar_t*>(L"winsta0\\default");
+	PROCESS_INFORMATION child = {};
+	okay = CreateProcessWithTokenW(primary, LOGON_WITH_PROFILE, executable.c_str(),
+		command.data(), 0, nullptr, updateTo.c_str(), &startup, &child);
+	CloseHandle(primary);
+	if (okay) { CloseHandle(child.hThread); CloseHandle(child.hProcess); }
+	return okay;
 }
 
 int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE prevInstance, LPWSTR cmdParamarg, int cmdShow) {
@@ -345,13 +303,27 @@ int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE prevInstance, LPWSTR cmdPara
 	LPWSTR *args;
 	int argsCount;
 
-	bool needupdate = false, autostart = false, debug = false, writeprotected = false, startintray = false;
+	bool needupdate = false, needrecover = false, autostart = false, debug = false, writeprotected = false, startintray = false;
+	DWORD waitPid = 0;
 	args = CommandLineToArgvW(GetCommandLine(), &argsCount);
 	if (args) {
 		for (int i = 1; i < argsCount; ++i) {
 			writeLog(std::wstring(L"Argument: ") + args[i]);
 			if (equal(args[i], L"-update")) {
 				needupdate = true;
+			} else if (equal(args[i], L"-recover")) {
+				needrecover = true;
+			} else if (equal(args[i], L"-fromversion") && ++i < argsCount) {
+				const auto version = Core::FishGramUpdates::ParseVersion(QString::fromWCharArray(args[i]).toStdString());
+				if (!version) { LocalFree(args); closeLog(); return 1; }
+				fromVersion = *version;
+			} else if (equal(args[i], L"-beta")) {
+				installBeta = true;
+			} else if (equal(args[i], L"-waitpid") && ++i < argsCount) {
+				wchar_t *end = nullptr;
+				const auto parsed = wcstoul(args[i], &end, 10);
+				if (!parsed || !end || *end) { LocalFree(args); closeLog(); return 1; }
+				waitPid = DWORD(parsed);
 			} else if (equal(args[i], L"-autostart")) {
 				autostart = true;
 			} else if (equal(args[i], L"-debug")) {
@@ -371,6 +343,9 @@ int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE prevInstance, LPWSTR cmdPara
 			} else if (equal(args[i], L"-workdir") && ++i < argsCount) {
 				writeLog(std::wstring(L"Argument: ") + args[i]);
 				customWorkingDir = args[i];
+			} else if (equal(args[i], L"-installpath") && ++i < argsCount) {
+				updateTo = args[i];
+				for (auto &ch : updateTo) if (ch == L'/') ch = L'\\';
 			} else if (equal(args[i], L"-key") && ++i < argsCount) {
 				writeLog(std::wstring(L"Argument: ") + args[i]);
 				customKeyFile = args[i];
@@ -399,20 +374,38 @@ int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE prevInstance, LPWSTR cmdPara
 			if (equal(updaterName.substr(updaterName.size() - 11), L"Updater.exe")) {
 				updaterDir = updaterName.substr(0, updaterName.size() - 11);
 				writeLog(L"Updater dir is: " + updaterDir);
-				if (!writeprotected) {
-					updateTo = updaterDir;
-				}
+				// A staged Updater resides below the work directory. Installation
+				// must use the explicit launcher destination, never its own folder.
 				writeLog(L"Update to: " + updateTo);
-				if (needupdate && update()) {
-					updateRegistry();
-				}
-				if (writeprotected) { // if we can't clear all tupdates\ready (Updater.exe is there) - clear only version
-					if (DeleteFile(L"tupdates\\temp\\tdata\\version") || DeleteFile(L"tupdates\\ready\\tdata\\version")) {
-						writeLog(L"Version file deleted!");
-					} else {
-						writeLog(L"Error: could not delete version file");
+				if (needupdate || needrecover) {
+					// The launcher hands over before its process has fully exited.
+					// Waiting prevents both normal install and rollback racing it.
+					if (waitPid) {
+						const auto parent = OpenProcess(SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION, FALSE, waitPid);
+						if (parent) {
+							wchar_t parentPath[32768] = {};
+							DWORD length = DWORD(std::size(parentPath));
+							const auto valid = QueryFullProcessImageNameW(parent, 0, parentPath, &length)
+								&& equal(parentPath, FishGramTransaction::Details::Join(updateTo, L"Telegram.exe"));
+							const auto exited = valid && WaitForSingleObject(parent, 60000) == WAIT_OBJECT_0;
+							CloseHandle(parent);
+							if (!exited) { LocalFree(args); closeLog(); return 1; }
+						} else if (GetLastError() != ERROR_INVALID_PARAMETER) {
+							LocalFree(args); closeLog(); return 1;
+						}
 					}
 				}
+				if (needrecover) {
+					const auto result = FishGramTransaction::RecoverPending(updateTo);
+					if (result != FishGramTransaction::Result::Recovered
+						&& result != FishGramTransaction::Result::NoRecoveryNeeded) {
+						updateError(updateResultMessage(result), DWORD(result));
+						LocalFree(args); closeLog(); return 1;
+					}
+				} else if (needupdate) {
+					if (!update()) { closeLog(); return 1; }
+				}
+
 			} else {
 				writeLog(L"Error: bad exe name!");
 			}
@@ -436,55 +429,17 @@ int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE prevInstance, LPWSTR cmdPara
 	}
 	writeLog(L"Result arguments: " + targs);
 
-	bool executed = false;
-	if (writeprotected) { // run un-elevated
-		writeLog(L"Trying to run un-elevated by temp.lnk");
-
-		HRESULT hres = CoInitialize(0);
-		if (SUCCEEDED(hres)) {
-			IShellLink* psl;
-			HRESULT hres = CoCreateInstance(CLSID_ShellLink, NULL, CLSCTX_INPROC_SERVER, IID_IShellLink, (LPVOID*)&psl);
-			if (SUCCEEDED(hres)) {
-				IPersistFile* ppf;
-
-				wstring exe = updateTo + exeName, dir = updateTo;
-				psl->SetArguments((targs.size() ? targs.substr(1) : targs).c_str());
-				psl->SetPath(exe.c_str());
-				psl->SetWorkingDirectory(dir.c_str());
-				psl->SetDescription(L"");
-
-				hres = psl->QueryInterface(IID_IPersistFile, (LPVOID*)&ppf);
-
-				if (SUCCEEDED(hres)) {
-					wstring lnk = L"tupdates\\temp\\temp.lnk";
-					hres = ppf->Save(lnk.c_str(), TRUE);
-					if (!SUCCEEDED(hres)) {
-						lnk = L"tupdates\\ready\\temp.lnk"; // old
-						hres = ppf->Save(lnk.c_str(), TRUE);
-					}
-					ppf->Release();
-
-					if (SUCCEEDED(hres)) {
-						writeLog(L"Executing un-elevated through link..");
-						ShellExecute(0, 0, L"explorer.exe", lnk.c_str(), 0, SW_SHOWNORMAL);
-						executed = true;
-					} else {
-						writeLog(L"Error: ppf->Save failed");
-					}
-				} else {
-					writeLog(L"Error: Could not create interface IID_IPersistFile");
-				}
-				psl->Release();
-			} else {
-				writeLog(L"Error: could not create instance of IID_IShellLink");
-			}
-			CoUninitialize();
-		} else {
-			writeLog(L"Error: Could not initialize COM");
-		}
-	}
+	const auto executed = Core::FishGramUpdates::RestartUpdatedClient(
+		writeprotected, Core::FishGramUpdates::IsCurrentProcessElevated(),
+		[&] { return launchUnelevated(FishGramTransaction::Details::Join(updateTo, exeName), L"-noupdate" + targs); },
+		[&] {
+			return reinterpret_cast<INT_PTR>(ShellExecuteW(0, 0,
+				FishGramTransaction::Details::Join(updateTo, exeName).c_str(),
+				(L"-noupdate" + targs).c_str(), 0, SW_SHOWNORMAL)) > 32;
+		});
 	if (!executed) {
-		ShellExecute(0, 0, (updateTo + exeName).c_str(), (L"-noupdate" + targs).c_str(), 0, SW_SHOWNORMAL);
+		updateError(L"The updater could not restart FishGram as a normal user. Close this updater and start FishGram from your normal desktop.", ERROR_ELEVATION_REQUIRED);
+		closeLog(); return 1;
 	}
 
 	writeLog(L"Executed '" + exeName + L"', closing log and quitting..");
@@ -493,7 +448,7 @@ int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE prevInstance, LPWSTR cmdPara
 	return 0;
 }
 
-static const WCHAR *_programName = L"Telegram Desktop"; // folder in APPDATA, if current path is unavailable for writing
+static const WCHAR *_programName = L"FishGram"; // folder in APPDATA, if current path is unavailable for writing
 static const WCHAR *_exeName = L"Updater.exe";
 
 LPTOP_LEVEL_EXCEPTION_FILTER _oldWndExceptionFilter = 0;

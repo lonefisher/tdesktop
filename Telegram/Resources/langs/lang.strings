@@ -667,6 +667,15 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 "lng_settings_latest_installed" = "Latest version is installed";
 "lng_settings_update_ready" = "New version is ready";
 "lng_settings_update_fail" = "Update check failed :(";
+"lng_settings_update_error_not_configured" = "Updates are not configured for this build. Your current version is still usable.";
+"lng_settings_update_error_network" = "The update service is unavailable. Your current version is still usable.";
+"lng_settings_update_error_timeout" = "The update request timed out. Your current version is still usable.";
+"lng_settings_update_error_manifest" = "The update manifest could not be read. Your current version is still usable.";
+"lng_settings_update_error_index" = "The update index is invalid. Your current version is still usable.";
+"lng_settings_update_error_signature" = "The update signature could not be verified. Your current version is still usable.";
+"lng_settings_update_error_download" = "The update download failed. Your current version is still usable.";
+"lng_settings_update_error_validation" = "The downloaded update did not pass validation. Your current version is still usable.";
+"lng_settings_update_error_staging" = "The update could not be prepared for installation. Your current version is still usable.";
 "lng_settings_workmode_tray" = "Show tray icon";
 "lng_settings_workmode_window" = "Show taskbar icon";
 "lng_settings_window_close" = "When window closed";
