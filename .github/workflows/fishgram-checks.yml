@@ -22,12 +22,15 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           repository: lonefisher/fishgram
-          ref: 496910e2254f49ce51369b61f740044e7715b068
+          ref: 9479d839eb12c9f002bc032b8da658069fd87d5c
           path: product
           persist-credentials: false
       - name: Test actual production helpers
         shell: pwsh
-        run: ./product/tools/test-restricted-search.ps1 -SourceRoot "$PWD/source" -OutputDirectory "$PWD/build-tests"
+        run: |
+          ./product/tools/test-restricted-search.ps1 -SourceRoot "$PWD/source" -OutputDirectory "$PWD/build-tests"
+          ./product/tools/test-update-policy.ps1 -SourceRoot "$PWD/source"
+          ./product/tools/test-update-transaction.ps1 -SourceRoot "$PWD/source"
   compile:
     name: Source test identity compile
     if: github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch'
@@ -38,7 +41,7 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           repository: lonefisher/fishgram
-          ref: 496910e2254f49ce51369b61f740044e7715b068
+          ref: 9479d839eb12c9f002bc032b8da658069fd87d5c
           path: product
           persist-credentials: false
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
@@ -70,4 +73,16 @@ jobs:
       - name: Compile test identity, never upload client or raw logs
         shell: pwsh
         working-directory: product
-        run: ./tools/build-telegram.ps1 -TestIdentity -Parallel 4
+        run: ./tools/build-telegram.ps1 -TestIdentity -TestUpdateSystem -Parallel 4
+      - name: Verify production update packages with disposable test keys
+        shell: pwsh
+        working-directory: product
+        run: ./tools/test-update-verify.ps1
+      - name: Sanitized build diagnostics only
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: source-build-diagnostics
+          path: product/reports/*-diagnostics.json
+          if-no-files-found: ignore
+          retention-days: 7
