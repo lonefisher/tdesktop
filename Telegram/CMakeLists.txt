@@ -2550,6 +2550,7 @@ endif()
 target_prepare_qrc(Telegram)
 
 if (NOT DESKTOP_APP_DISABLE_AUTOUPDATE AND NOT build_macstore AND NOT build_winstore)
+    target_sources(Telegram PRIVATE ${src_loc}/core/fishgram_update_payload.cpp ${src_loc}/core/fishgram_update_payload.h)
     add_executable(Updater WIN32)
     init_non_host_target(Updater)
 
@@ -2568,6 +2569,12 @@ if (NOT DESKTOP_APP_DISABLE_AUTOUPDATE AND NOT build_macstore AND NOT build_wins
     )
 
     if (WIN32)
+        target_sources(Updater PRIVATE ${src_loc}/core/fishgram_update_payload.cpp
+            ${src_loc}/core/update_verify.cpp ${src_loc}/core/update_keys.cpp)
+        target_include_directories(Updater PRIVATE ${src_loc} ${CMAKE_CURRENT_BINARY_DIR}/gen)
+        add_dependencies(Updater Telegram_update_keys)
+        target_link_libraries(Updater PRIVATE desktop-app::external_qt
+            desktop-app::external_auto_updates desktop-app::external_openssl)
         get_filename_component(lib_base_loc lib_base REALPATH)
         nice_target_sources(Updater ${lib_base_loc}
         PRIVATE

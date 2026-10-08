@@ -21,6 +21,7 @@ private:
 		char *argv[]) const override;
 
 	void initHook() override;
+	std::optional<int> recoverUpdateHook() override;
 
 	bool launchUpdater(UpdaterLaunch action) override;
 

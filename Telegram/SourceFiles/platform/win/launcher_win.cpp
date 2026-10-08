@@ -9,6 +9,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 #include "core/crash_reports.h"
 #include "core/update_checker.h"
+#include "core/update_channel.h"
+#include "_other/fishgram_update_transaction.h"
 
 #include <windows.h>
 #include <shellapi.h>
@@ -122,6 +124,30 @@ void Launcher::initHook() {
 	}
 }
 
+std::optional<int> Launcher::recoverUpdateHook() {
+	namespace Transaction = Core::FishGramUpdates::WindowsTransaction;
+	const auto recovery = Transaction::InspectStartupRecovery(
+		QDir::toNativeSeparators(cExeDir()).toStdWString());
+	if (recovery.state == Transaction::StartupRecovery::State::None) {
+		return std::nullopt;
+	}
+	if (recovery.state == Transaction::StartupRecovery::State::Blocked) {
+		MessageBoxW(nullptr,
+			L"FishGram cannot recover the interrupted update safely. "
+			L"Close other FishGram instances and use the program recovery backup before opening account data.",
+			L"FishGram update recovery", MB_OK | MB_ICONERROR);
+		return 1;
+	}
+	const auto arguments = QStringList{
+		u"-recover"_q,
+		u"-installpath"_q, '"' + cExeDir() + '"',
+		u"-workdir"_q, '"' + cWorkingDir() + '"',
+		u"-waitpid"_q, QString::number(qulonglong(GetCurrentProcessId())),
+	};
+	return launch(recovery.requiresElevation ? u"runas"_q : QString(),
+		QString::fromStdWString(recovery.updaterPath), arguments) ? 0 : 1;
+}
+
 std::optional<QStringList> Launcher::readArgumentsHook(
 		int argc,
 		char *argv[]) const {
@@ -150,9 +176,14 @@ bool Launcher::launchUpdater(UpdaterLaunch action) {
 		: (cWriteProtected()
 			? u"runas"_q
 			: QString());
-	const auto binaryPath = (action == UpdaterLaunch::JustRelaunch)
-		? (cExeDir() + cExeName())
-		: (cWorkingDir() + u"tupdates/temp/Updater.exe"_q);
+	auto binaryPath = cExeDir() + cExeName();
+	if (action != UpdaterLaunch::JustRelaunch) {
+		std::wstring runner;
+		if (!Core::FishGramUpdates::WindowsTransaction::PrepareUpdateRunner(
+			QDir::toNativeSeparators(cExeDir()).toStdWString(), &runner)) return false;
+		// Never execute an unauthenticated binary from the work directory.
+		binaryPath = QString::fromStdWString(runner);
+	}
 
 	auto argumentsList = QStringList();
 	const auto pushArgument = [&](const QString &argument) {
@@ -183,6 +214,11 @@ bool Launcher::launchUpdater(UpdaterLaunch action) {
 		}
 	} else {
 		pushArgument(u"-update"_q);
+		pushArgument(u"-waitpid"_q);
+		pushArgument(QString::number(qulonglong(GetCurrentProcessId())));
+		pushArgument(u"-fromversion"_q);
+		pushArgument(QString::number(qulonglong(Core::RunningUpdateVersion())));
+		if (cInstallBetaVersion()) pushArgument(u"-beta"_q);
 		pushArgument(u"-exename"_q);
 		pushArgument('"' + cExeName() + '"');
 		pushArgument(u"-installpath"_q);

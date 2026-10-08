@@ -10,12 +10,19 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "base/platform/win/base_windows_safe_library.h"
 #include "core/version.h"
 #include "_other/fishgram_update_transaction.h"
+#include "core/update_keys.h"
+#include "core/update_verify.h"
+#include "core/fishgram_update_payload.h"
+#include <QtCore/QFile>
+#include <QtCore/QDateTime>
 
 #include <cstdint>
 
 bool _debug = false;
 
 wstring updaterName, updaterDir, updateTo, exeName, customWorkingDir, customKeyFile;
+std::uint64_t fromVersion = 0;
+bool installBeta = false;
 
 bool equal(const wstring &a, const wstring &b) {
 	return !_wcsicmp(a.c_str(), b.c_str());
@@ -161,12 +168,56 @@ bool update() {
 	request.installDir = updateTo;
 	request.workDir = workDir;
 	request.executableName = L"Telegram.exe";
-	request.runningVersion = (std::uint64_t(FISHGRAM_BASE_VERSION) << 32)
+	const auto ownVersion = (std::uint64_t(FISHGRAM_BASE_VERSION) << 32)
 		| std::uint64_t(FISHGRAM_REVISION);
 #ifndef TDESKTOP_UPDATE_CHANNEL
 #define TDESKTOP_UPDATE_CHANNEL 0
 #endif // TDESKTOP_UPDATE_CHANNEL
-	request.signedChannel = TDESKTOP_UPDATE_CHANNEL;
+	const auto read = [](const wstring &path, qint64 limit) {
+		QFile file(QString::fromStdWString(path));
+		return file.open(QIODevice::ReadOnly) && file.size() > 0 && file.size() <= limit
+			? file.readAll() : QByteArray();
+	};
+	const auto root = Core::Updates::RootPublicKeyPem();
+	const auto embedded = Core::Updates::ParseVerifiedManifest(
+		Core::Updates::EmbeddedManifest(), Core::Updates::EmbeddedManifestSignature(), root);
+	const auto held = Core::FishGramUpdates::ReadVerifiedTrustRecord(
+		read(FishGramTransaction::Details::Join(updateTo, L".fishgram-update\\held-trust"), 1024 * 1024), root);
+	if (!embedded || !held || held->version < embedded->version
+		|| (held->version == embedded->version && held->bytes != embedded->bytes)) {
+		updateError(L"The FishGram signing-key authorization is missing or invalid.", ERROR_INVALID_DATA);
+		return false;
+	}
+	const auto running = fromVersion > ownVersion ? fromVersion : ownVersion;
+	const auto packageBytes = read(FishGramTransaction::Details::Join(workDir, L"tupdates\\package.v2"), Core::Updates::kMaxPayloadSize);
+	const auto verified = Core::Updates::VerifyUpdate(
+		packageBytes,
+		Core::Updates::Channel(TDESKTOP_UPDATE_CHANNEL), installBeta,
+		{ Core::Updates::Os::Windows, Core::Updates::Arch::X64 }, running,
+		held, root, QDateTime::currentSecsSinceEpoch());
+	const auto payload = verified ? Core::FishGramUpdates::DecodeVerifiedPayload(*verified) : std::nullopt;
+	if (!payload) {
+		updateError(L"The update failed FishGram signature, version, platform or payload validation.", ERROR_INVALID_DATA);
+		return false;
+	}
+	request.runningVersion = payload->version;
+	request.signedChannel = std::uint32_t(payload->channel);
+	request.authorize = [&] {
+		// Re-read the installation's newest root-signed authorization under the
+		// same install lock used by the client when persisting a newer manifest.
+		const auto current = Core::FishGramUpdates::ReadVerifiedTrustRecord(
+			read(FishGramTransaction::Details::Join(updateTo, L".fishgram-update\\held-trust"), 1024 * 1024), root);
+		return current && current->version >= held->version
+			&& (current->version != held->version || current->bytes == held->bytes)
+			&& bool(Core::Updates::VerifyUpdate(packageBytes,
+				Core::Updates::Channel(TDESKTOP_UPDATE_CHANNEL), installBeta,
+				{ Core::Updates::Os::Windows, Core::Updates::Arch::X64 }, running,
+				current, root, QDateTime::currentSecsSinceEpoch()));
+	};
+	for (const auto &[name, bytes] : payload->files) {
+		const auto begin = reinterpret_cast<const unsigned char*>(bytes.constData());
+		request.authenticatedFiles.push_back({ name.toStdWString(), {begin, begin + bytes.size()} });
+	}
 	const auto result = FishGramTransaction::Apply(request);
 	writeLog(L"Transactional update result: " + std::to_wstring(int(result)));
 	if (result == FishGramTransaction::Result::Applied
@@ -190,13 +241,27 @@ int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE prevInstance, LPWSTR cmdPara
 	LPWSTR *args;
 	int argsCount;
 
-	bool needupdate = false, autostart = false, debug = false, writeprotected = false, startintray = false;
+	bool needupdate = false, needrecover = false, autostart = false, debug = false, writeprotected = false, startintray = false;
+	DWORD waitPid = 0;
 	args = CommandLineToArgvW(GetCommandLine(), &argsCount);
 	if (args) {
 		for (int i = 1; i < argsCount; ++i) {
 			writeLog(std::wstring(L"Argument: ") + args[i]);
 			if (equal(args[i], L"-update")) {
 				needupdate = true;
+			} else if (equal(args[i], L"-recover")) {
+				needrecover = true;
+			} else if (equal(args[i], L"-fromversion") && ++i < argsCount) {
+				const auto version = Core::FishGramUpdates::ParseVersion(QString::fromWCharArray(args[i]).toStdString());
+				if (!version) { LocalFree(args); closeLog(); return 1; }
+				fromVersion = *version;
+			} else if (equal(args[i], L"-beta")) {
+				installBeta = true;
+			} else if (equal(args[i], L"-waitpid") && ++i < argsCount) {
+				wchar_t *end = nullptr;
+				const auto parsed = wcstoul(args[i], &end, 10);
+				if (!parsed || !end || *end) { LocalFree(args); closeLog(); return 1; }
+				waitPid = DWORD(parsed);
 			} else if (equal(args[i], L"-autostart")) {
 				autostart = true;
 			} else if (equal(args[i], L"-debug")) {
@@ -218,6 +283,7 @@ int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE prevInstance, LPWSTR cmdPara
 				customWorkingDir = args[i];
 			} else if (equal(args[i], L"-installpath") && ++i < argsCount) {
 				updateTo = args[i];
+				for (auto &ch : updateTo) if (ch == L'/') ch = L'\\';
 			} else if (equal(args[i], L"-key") && ++i < argsCount) {
 				writeLog(std::wstring(L"Argument: ") + args[i]);
 				customKeyFile = args[i];
@@ -249,7 +315,32 @@ int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE prevInstance, LPWSTR cmdPara
 				// A staged Updater resides below the work directory. Installation
 				// must use the explicit launcher destination, never its own folder.
 				writeLog(L"Update to: " + updateTo);
-				if (needupdate) {
+				if (needupdate || needrecover) {
+					// The launcher hands over before its process has fully exited.
+					// Waiting prevents both normal install and rollback racing it.
+					if (waitPid) {
+						const auto parent = OpenProcess(SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION, FALSE, waitPid);
+						if (parent) {
+							wchar_t parentPath[32768] = {};
+							DWORD length = DWORD(std::size(parentPath));
+							const auto valid = QueryFullProcessImageNameW(parent, 0, parentPath, &length)
+								&& equal(parentPath, FishGramTransaction::Details::Join(updateTo, L"Telegram.exe"));
+							const auto exited = valid && WaitForSingleObject(parent, 60000) == WAIT_OBJECT_0;
+							CloseHandle(parent);
+							if (!exited) { LocalFree(args); closeLog(); return 1; }
+						} else if (GetLastError() != ERROR_INVALID_PARAMETER) {
+							LocalFree(args); closeLog(); return 1;
+						}
+					}
+				}
+				if (needrecover) {
+					const auto result = FishGramTransaction::RecoverPending(updateTo);
+					if (result != FishGramTransaction::Result::Recovered
+						&& result != FishGramTransaction::Result::NoRecoveryNeeded) {
+						updateError(updateResultMessage(result), DWORD(result));
+						LocalFree(args); closeLog(); return 1;
+					}
+				} else if (needupdate) {
 					if (!update()) { closeLog(); return 1; }
 				}
 

@@ -40,23 +40,57 @@ enum class Result {
 	IoError,
 };
 
+struct AuthenticatedFile final {
+	std::wstring name;
+	std::vector<unsigned char> bytes;
+};
+
 struct Request final {
 	std::wstring installDir;
 	std::wstring workDir;
 	std::wstring executableName = L"Telegram.exe";
 	std::uint64_t runningVersion = 0;
 	std::uint32_t signedChannel = kAnyChannel;
+	std::vector<AuthenticatedFile> authenticatedFiles;
+	std::function<bool()> authorize;
 	std::function<bool(const std::wstring&, std::uint64_t)> spaceAvailable;
 	std::function<bool(const std::wstring&)> writeAccess;
 	std::function<bool(const std::wstring&)> processRunning;
 	std::function<bool(const std::wstring&, const std::wstring&)> copyFile;
 	std::function<void()> onLockAcquired;
 	std::function<void(std::size_t)> afterReplace;
+	std::function<void()> afterCommit;
+};
+
+struct StartupRecovery final {
+	enum class State { None, Required, Blocked };
+	State state = State::None;
+	std::wstring updaterPath;
+	bool requiresElevation = false;
 };
 
 namespace Details {
 
 using Names = std::vector<std::wstring>;
+
+[[nodiscard]] inline bool WriteAuthenticated(
+		const std::wstring &path, const std::vector<unsigned char> &bytes) {
+	const auto file = CreateFileW(path.c_str(), GENERIC_WRITE, 0, nullptr,
+		CREATE_NEW, FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
+	if (file == INVALID_HANDLE_VALUE) return false;
+	bool okay = !bytes.empty();
+	std::size_t offset = 0;
+	while (okay && offset < bytes.size()) {
+		const auto remaining = bytes.size() - offset;
+		const auto chunk = DWORD(remaining > 1024 * 1024 ? 1024 * 1024 : remaining);
+		DWORD written = 0;
+		okay = WriteFile(file, bytes.data() + offset, chunk, &written, nullptr) && written == chunk;
+		offset += written;
+	}
+	okay = okay && FlushFileBuffers(file);
+	CloseHandle(file);
+	return okay;
+}
 
 struct Payload final {
 	Names names;
@@ -970,6 +1004,25 @@ inline void AppendText(
 	if (!Preflight(request, installDir, payload, &originalNames, &backupSize, &failure)) {
 		return failure;
 	}
+	// Keep a trusted pre-update recovery executable outside pending and tupdates.
+	// It must survive both ready cleanup and rollback while it is running.
+	const auto recovery = Join(meta, L"recovery");
+	const auto recoveryUpdater = Join(recovery, L"Updater.exe");
+	const auto recoveryNew = Join(recovery, L"Updater.exe.new");
+	if (!ContainsName(originalNames, L"Updater.exe") || !EnsureDirectory(recovery)) {
+		return Result::InvalidInstallPath;
+	}
+	DWORD recoveryAttributes = 0;
+	if (Attributes(recoveryUpdater, &recoveryAttributes)
+		&& (recoveryAttributes & (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT))) {
+		return Result::InvalidInstallPath;
+	}
+	if (Attributes(recoveryNew) && !DeleteFileW(recoveryNew.c_str())) return Result::CopyFailed;
+	if (!CopyDurable(request, Join(installDir, L"Updater.exe"), recoveryNew, true)
+		|| !MoveFileExW(recoveryNew.c_str(), recoveryUpdater.c_str(),
+			MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
+		return Result::CopyFailed;
+	}
 	const auto pending = Join(meta, L"pending");
 	if (!EnsureDirectory(pending)) return Result::WriteDenied;
 	const auto backup = Join(pending, L"backup");
@@ -1004,7 +1057,14 @@ inline void AppendText(
 			failure = Result::CopyFailed;
 			break;
 		}
-		if (!CopyDurable(request, source, staged, true)
+		const auto copied = [&] {
+			if (request.authenticatedFiles.empty()) return CopyDurable(request, source, staged, true);
+			for (const auto &file : request.authenticatedFiles) {
+				if (SameName(file.name, name)) return WriteAuthenticated(staged, file.bytes);
+			}
+			return false;
+		}();
+		if (!copied
 			|| !MoveFileExW(
 				staged.c_str(), target.c_str(),
 				MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
@@ -1033,6 +1093,7 @@ inline void AppendText(
 			? Result::IoError
 			: Result::RecoveryFailed;
 	}
+	if (request.afterCommit) request.afterCommit();
 	if (!TrimVersions(versions) || !RemoveTree(pending)) return Result::Applied;
 	return Result::Applied;
 }
@@ -1074,6 +1135,10 @@ inline void AppendText(
 	Result failure = Result::IoError;
 	if (!AcquireLock(meta, &lock, &failure)) return failure;
 	if (request.onLockAcquired) request.onLockAcquired();
+	if (request.processRunning
+		? request.processRunning(Join(installDir, request.executableName))
+		: TargetProcessRunning(Join(installDir, request.executableName))) return Result::AppRunning;
+	if (request.authorize && !request.authorize()) return Result::InvalidPayload;
 	const auto recovered = RecoverLocked(meta, versions, &request);
 	if (recovered == Result::RecoveryFailed) return recovered;
 	const auto updatesDir = Join(workDir, L"tupdates");
@@ -1097,6 +1162,18 @@ inline void AppendText(
 		return Result::InvalidPayload;
 	}
 	if (!ReadReady(ready, &payload.version, &payload.channel)) return Result::InvalidReadyMarker;
+	if (!request.authenticatedFiles.empty()) {
+		if (payload.names.size() != request.authenticatedFiles.size()) return Result::InvalidPayload;
+		Names authenticatedNames;
+		payload.size = 0;
+		for (const auto &file : request.authenticatedFiles) {
+			if (!IsAsciiSafeName(file.name) || !ContainsName(payload.names, file.name)
+				|| ContainsName(authenticatedNames, file.name) || file.bytes.empty()
+				|| file.bytes.size() > (1024ULL * 1024 * 1024 - payload.size)) return Result::InvalidPayload;
+			authenticatedNames.push_back(file.name);
+			payload.size += file.bytes.size();
+		}
+	}
 	if (payload.version != request.runningVersion) return Result::VersionMismatch;
 	if (request.signedChannel != kAnyChannel && request.signedChannel != payload.channel) {
 		return Result::ChannelMismatch;
@@ -1114,7 +1191,67 @@ inline void AppendText(
 	InstallLock lock;
 	Result failure = Result::IoError;
 	if (!AcquireLock(meta, &lock, &failure)) return failure;
+	if (TargetProcessRunning(Join(installDir, L"Telegram.exe"))) return Result::AppRunning;
 	return RecoverLocked(meta, versions, nullptr);
+}
+
+[[nodiscard]] inline StartupRecovery InspectStartupRecovery(
+		const std::wstring &inputInstallDir) {
+	using namespace Details;
+	std::wstring installDir;
+	if (!CanonicalDirectory(inputInstallDir, &installDir)) return { StartupRecovery::State::Blocked, {} };
+	const auto meta = Join(installDir, L".fishgram-update");
+	if (IsAbsent(meta)) return {};
+	const auto pending = Join(meta, L"pending");
+	if (!IsSafeDirectory(meta)) return { StartupRecovery::State::Blocked, {} };
+	InstallLock lock;
+	Result failure = Result::IoError;
+	const auto locked = AcquireLock(meta, &lock, &failure);
+	if (!locked && failure != Result::WriteDenied) return { StartupRecovery::State::Blocked, {} };
+	if (IsAbsent(pending)) return {};
+	if (!IsSafeDirectory(pending)) return { StartupRecovery::State::Blocked, {} };
+	Journal journal;
+	const auto journalPath = Join(pending, L"journal.bin");
+	// Before the journal is committed no program file has been replaced.
+	// The recovery process can safely remove this incomplete preparation.
+	if (!IsAbsent(journalPath) && !ReadJournal(journalPath, &journal)) return { StartupRecovery::State::Blocked, {} };
+	std::wstring recovery;
+	if (!CanonicalDirectory(Join(meta, L"recovery"), &recovery)) return { StartupRecovery::State::Blocked, {} };
+	const auto updater = Join(recovery, L"Updater.exe");
+	DWORD attributes = 0;
+	if (!Attributes(updater, &attributes)
+		|| (attributes & (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT))) {
+		return { StartupRecovery::State::Blocked, {} };
+	}
+	return { StartupRecovery::State::Required, updater, !locked };
+}
+
+[[nodiscard]] inline bool PrepareUpdateRunner(
+		const std::wstring &inputInstallDir, std::wstring *updaterPath) {
+	using namespace Details;
+	std::wstring installDir, meta, versions;
+	if (!CanonicalDirectory(inputInstallDir, &installDir)
+		|| !PrepareMetadata(installDir, &meta, &versions)) return false;
+	InstallLock lock;
+	Result failure = Result::IoError;
+	if (!AcquireLock(meta, &lock, &failure) || !IsAbsent(Join(meta, L"pending"))) return false;
+	const auto source = Join(installDir, L"Updater.exe");
+	const auto held = CreateFileW(source.c_str(), GENERIC_READ, FILE_SHARE_READ,
+		nullptr, OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
+	if (held == INVALID_HANDLE_VALUE) return false;
+	BY_HANDLE_FILE_INFORMATION info = {};
+	const auto valid = GetFileInformationByHandle(held, &info)
+		&& !(info.dwFileAttributes & (FILE_ATTRIBUTE_REPARSE_POINT | FILE_ATTRIBUTE_DIRECTORY));
+	const auto runner = Join(meta, L"runner");
+	const auto next = Join(runner, L"Updater.exe.new");
+	const auto target = Join(runner, L"Updater.exe");
+	const auto prepared = valid && EnsureDirectory(runner)
+		&& (IsAbsent(next) || DeleteFileW(next.c_str()))
+		&& CopyDurable(Request(), source, next, true)
+		&& MoveFileExW(next.c_str(), target.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH);
+	CloseHandle(held);
+	if (prepared) *updaterPath = target;
+	return prepared;
 }
 
 } // namespace Core::FishGramUpdates::WindowsTransaction

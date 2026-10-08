@@ -22,6 +22,10 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "core/update_verify.h"
 #include "core/fishgram_update_policy.h"
 #include "core/fishgram_update_feed.h"
+#include "core/fishgram_update_payload.h"
+#ifdef Q_OS_WIN
+#include "_other/fishgram_update_transaction.h"
+#endif
 #include <set>
 #include <QtCore/QCryptographicHash>
 #include "core/version.h"
@@ -517,6 +521,16 @@ QString ExtractFilename(const QString &url) {
 
 	const auto tempDirPath = cWorkingDir() + u"tupdates/temp"_q;
 	const auto readyFilePath = cWorkingDir() + u"tupdates/temp/ready"_q;
+#ifdef Q_OS_WIN
+	std::wstring work;
+	if (!FishGramUpdates::WindowsTransaction::Details::CanonicalDirectory(
+		QDir::toNativeSeparators(cWorkingDir()).toStdWString(), &work)
+		|| !FishGramUpdates::WindowsTransaction::Details::EnsureDirectory(
+			FishGramUpdates::WindowsTransaction::Details::Join(work, L"tupdates"))) return false;
+	const auto staged = FishGramUpdates::WindowsTransaction::Details::Join(work, L"tupdates\\temp");
+	if (!FishGramUpdates::WindowsTransaction::Details::IsAbsent(staged)
+		&& !FishGramUpdates::WindowsTransaction::Details::IsSafeDirectory(staged)) return false;
+#endif
 	base::Platform::DeleteDirectory(tempDirPath);
 
 	QDir tempDir(tempDirPath);
@@ -534,6 +548,34 @@ QString ExtractFilename(const QString &url) {
 	}
 
 	tempDir.mkdir(tempDir.absolutePath());
+
+#ifdef Q_OS_WIN
+	// Installation re-verifies this exact v2 package under the installed root.
+	// Persist the latest held key authorization outside the untrusted workdir.
+	namespace Transaction = FishGramUpdates::WindowsTransaction;
+	std::wstring install, meta, versions;
+	if (!Transaction::Details::CanonicalDirectory(QDir::toNativeSeparators(cExeDir()).toStdWString(), &install)
+		|| !Transaction::Details::PrepareMetadata(install, &meta, &versions)) return false;
+	Transaction::Details::InstallLock installLock;
+	Transaction::Result lockFailure = Transaction::Result::IoError;
+	if (!Transaction::Details::AcquireLock(meta, &installLock, &lockFailure)) return false;
+	const auto trustPath = QString::fromStdWString(Transaction::Details::Join(meta, L"held-trust"));
+	QFile priorTrust(trustPath);
+	if (priorTrust.exists()) {
+		std::uint64_t trustSize = 0;
+		if (!Transaction::Details::FileSize(trustPath.toStdWString(), &trustSize)) return false;
+		if (!priorTrust.open(QIODevice::ReadOnly) || priorTrust.size() > 1024 * 1024) return false;
+		const auto prior = FishGramUpdates::ReadVerifiedTrustRecord(priorTrust.readAll(), Updates::RootPublicKeyPem());
+		if (!prior || prior->version > verified->manifest.version
+			|| (prior->version == verified->manifest.version && prior->bytes != verified->manifest.bytes)) return false;
+		priorTrust.close();
+	}
+	QSaveFile trustFile(trustPath);
+	const auto trustRecord = FishGramUpdates::EncodeTrustRecord(verified->manifest);
+	if (!trustFile.open(QIODevice::WriteOnly) || trustFile.write(trustRecord) != trustRecord.size() || !trustFile.commit()) return false;
+	QSaveFile packageFile(cWorkingDir() + u"tupdates/package.v2"_q);
+	if (!packageFile.open(QIODevice::WriteOnly) || packageFile.write(content) != content.size() || !packageFile.commit()) return false;
+#endif
 
 	{
 		QDataStream stream(*uncompressed);
@@ -1544,8 +1586,8 @@ bool checkReadyUpdate() {
 		}
 	}
 #ifdef Q_OS_WIN
-    // Launch the verified staged Updater. Installation owns replacement and
-    // rollback, so the current Updater remains intact until its backup exists.
+    // Only check payload presence here. The launcher runs a copy of the
+    // installed Updater, which re-verifies the retained package before writing.
     if (!updater.isFile() || updater.isSymLink()) return false;
 #elif defined Q_OS_MAC // Q_OS_WIN
 	QDir().mkpath(QFileInfo(curUpdater).absolutePath());

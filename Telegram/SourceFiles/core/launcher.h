@@ -66,6 +66,9 @@ private:
 	void init();
 	virtual void initHook() {
 	}
+	virtual std::optional<int> recoverUpdateHook() {
+		return std::nullopt;
+	}
 	virtual void initHighDpi();
 
 	virtual bool launchUpdater(UpdaterLaunch action) = 0;

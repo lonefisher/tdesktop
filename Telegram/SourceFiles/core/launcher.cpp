@@ -361,6 +361,12 @@ int Launcher::exec() {
 
 	// Must be started before Platform is started.
 	Logs::start();
+	// Recover an interrupted program transaction before reading account/options
+	// or letting the normal ready check discard its staging directory.
+	if (const auto recoveryResult = recoverUpdateHook()) {
+		Logs::finish();
+		return *recoveryResult;
+	}
 	base::options::init(cWorkingDir() + "tdata/experimental_options.json");
 
 	// Must be called after options are inited.

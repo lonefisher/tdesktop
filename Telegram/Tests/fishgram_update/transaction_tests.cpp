@@ -243,11 +243,99 @@ void TestAbruptInterruptionRecoversFromDurableJournal() {
 	CloseHandle(process.hProcess);
 	assert(exitCode == 73);
 	assert(Read(fixture.install / L"Telegram.exe") == "new-telegram");
+	const auto recovery = InspectStartupRecovery(fixture.install.wstring());
+	assert(recovery.state == StartupRecovery::State::Required);
+	assert(Read(recovery.updaterPath) == "old-updater");
+	assert(fs::path(recovery.updaterPath).parent_path().filename() == L"recovery");
 	assert(RecoverPending(fixture.install.wstring()) == Result::Recovered);
 	assert(Read(fixture.install / L"Telegram.exe") == "old-telegram");
 	assert(Read(fixture.install / L"Updater.exe") == "old-updater");
 	assert(Read(fixture.install / L"old.dll") == "old-library");
 	assert(Read(fixture.install / L"FishGramData" / L"tdata" / L"key_data") == "account-secret");
+	assert(InspectStartupRecovery(fixture.install.wstring()).state == StartupRecovery::State::None);
+}
+
+void TestStartupRecoveryBeforeAnyReadyCleanup() {
+	Fixture fixture(L"startup-");
+	assert(InspectStartupRecovery(fixture.install.wstring()).state == StartupRecovery::State::None);
+	assert(!fs::exists(fixture.install / L".fishgram-update"));
+	fixture.Payload(7002009001ULL);
+	auto request = fixture.RequestFor(7002009001ULL);
+	request.afterCommit = [] { throw 42; };
+	try { (void)Apply(request); assert(false); } catch (int code) { assert(code == 42); }
+	// Committed interruption must keep the new program, even when its version
+	// equals ready. Recovery does not depend on the work directory surviving.
+	fs::remove_all(fixture.work / L"tupdates");
+	const auto recovery = InspectStartupRecovery(fixture.install.wstring());
+	assert(recovery.state == StartupRecovery::State::Required);
+	assert(RecoverPending(fixture.install.wstring()) == Result::Recovered);
+	assert(Read(fixture.install / L"Telegram.exe") == "new-telegram");
+	assert(Read(fixture.install / L"Updater.exe") == "new-updater");
+	assert(!fs::exists(fixture.install / L".fishgram-update" / L"pending"));
+}
+
+void TestStartupRecoveryBeforeJournalCreation() {
+	Fixture fixture(L"pre-journal-");
+	const auto meta = fixture.install / L".fishgram-update";
+	fs::create_directories(meta / L"pending" / L"backup");
+	fs::create_directories(meta / L"versions");
+	Write(meta / L"recovery" / L"Updater.exe", "old-updater");
+	assert(InspectStartupRecovery(fixture.install.wstring()).state == StartupRecovery::State::Required);
+	assert(RecoverPending(fixture.install.wstring()) == Result::Recovered);
+	assert(Read(fixture.install / L"Telegram.exe") == "old-telegram");
+	assert(!fs::exists(meta / L"pending"));
+	fs::create_directories(meta / L"pending");
+	Write(meta / L"pending" / L"journal.bin", "corrupt");
+	assert(InspectStartupRecovery(fixture.install.wstring()).state == StartupRecovery::State::Blocked);
+}
+
+void TestTransactionWritesOnlyAuthenticatedBytes() {
+	Fixture fixture(L"authenticated-");
+	fixture.Payload(7002009001ULL);
+	auto request = fixture.RequestFor(7002009001ULL);
+	for (const auto &name : {L"Telegram.exe", L"Updater.exe", L"zlib.dll"}) {
+		const std::string content = "authenticated-program";
+		request.authenticatedFiles.push_back({name, {content.begin(), content.end()}});
+	}
+	// A same-size staging change after verification cannot become installed code.
+	Write(fixture.work / L"tupdates" / L"temp" / L"Telegram.exe", "tampered-program");
+	assert(Apply(request) == Result::Applied);
+	assert(Read(fixture.install / L"Telegram.exe") == "authenticated-program");
+	assert(Read(fixture.install / L"Updater.exe") == "authenticated-program");
+	assert(Read(fixture.work / L"tdata" / L"map0") == "working-account-secret");
+	fixture.Payload(7002009002ULL);
+	request = fixture.RequestFor(7002009002ULL);
+	request.authenticatedFiles.push_back({L"Telegram.exe", {'x'}});
+	assert(Apply(request) == Result::InvalidPayload);
+	assert(Read(fixture.install / L"Telegram.exe") == "authenticated-program");
+}
+
+void TestPendingRecoveryDoesNotReplaceRunningProgram() {
+	Fixture fixture(L"live-pending-");
+	fixture.Payload(7002009001ULL);
+	auto interrupted = fixture.RequestFor(7002009001ULL);
+	interrupted.afterReplace = [](std::size_t) { throw 42; };
+	try { (void)Apply(interrupted); assert(false); } catch (int code) { assert(code == 42); }
+	assert(Read(fixture.install / L"Telegram.exe") == "new-telegram");
+	auto busy = fixture.RequestFor(7002009001ULL);
+	busy.processRunning = [](const std::wstring&) { return true; };
+	assert(Apply(busy) == Result::AppRunning);
+	assert(Read(fixture.install / L"Telegram.exe") == "new-telegram");
+	assert(RecoverPending(fixture.install.wstring()) == Result::Recovered);
+	assert(Read(fixture.install / L"Telegram.exe") == "old-telegram");
+}
+
+void TestTrustedUpdateRunnerAndAuthorizationGate() {
+	Fixture fixture(L"runner-");
+	std::wstring runner;
+	assert(PrepareUpdateRunner(fixture.install.wstring(), &runner));
+	assert(Read(runner) == "old-updater");
+	assert(fs::path(runner).parent_path().filename() == L"runner");
+	fixture.Payload(7002009001ULL);
+	auto request = fixture.RequestFor(7002009001ULL);
+	request.authorize = [] { return false; };
+	assert(Apply(request) == Result::InvalidPayload);
+	assert(Read(fixture.install / L"Telegram.exe") == "old-telegram");
 }
 
 void TestInstallLockSerializesSameDirectory() {
@@ -325,6 +413,11 @@ int wmain(int argc, wchar_t **argv) {
 	TestSpaceAndPreflightFailuresLeaveProgramUntouched();
 	TestCopyFailureRollsBackAllFiles();
 	TestAbruptInterruptionRecoversFromDurableJournal();
+	TestStartupRecoveryBeforeAnyReadyCleanup();
+	TestStartupRecoveryBeforeJournalCreation();
+	TestTransactionWritesOnlyAuthenticatedBytes();
+	TestPendingRecoveryDoesNotReplaceRunningProgram();
+	TestTrustedUpdateRunnerAndAuthorizationGate();
 	TestInstallLockSerializesSameDirectory();
 	TestRetainsCurrentAndTwoPriorVersions();
 	std::cout << "Windows update transaction tests passed.\n";
