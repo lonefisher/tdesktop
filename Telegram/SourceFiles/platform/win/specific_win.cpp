@@ -10,6 +10,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "platform/win/main_window_win.h"
 #include "platform/win/notifications_manager_win.h"
 #include "platform/win/windows_app_user_model_id.h"
+#include "platform/win/windows_app_user_model_identity.h"
 #include "platform/win/windows_dlls.h"
 #include "platform/win/windows_autostart_task.h"
 #include "base/platform/base_platform_info.h"
@@ -194,10 +195,8 @@ bool ManageAppLink(
 		}
 		return false;
 	}
-	const auto lnk = QString::fromWCharArray(startupFolder)
-		+ '\\'
-		+ AppFile.utf16()
-		+ u".lnk"_q;
+	const auto lnk = QString::fromStdWString(
+		WindowsAppIdentity::ShortcutPath(startupFolder));
 	if (!create) {
 		QFile::remove(lnk);
 		return true;
@@ -237,6 +236,33 @@ bool ManageAppLink(
 		return false;
 	}
 	return true;
+}
+
+[[nodiscard]] bool ShortcutTargetsMyExecutable(const QString &path) {
+	const auto myid = AppUserModelId::MyExecutablePathId();
+	if (!myid || !QFile::exists(path)) {
+		return false;
+	}
+	if (!SUCCEEDED(CoInitialize(nullptr))) {
+		return false;
+	}
+	const auto coGuard = gsl::finally([] {
+		CoUninitialize();
+	});
+	const auto native = QDir::toNativeSeparators(path).toStdWString();
+	const auto shellLink = base::WinRT::TryCreateInstance<IShellLink>(
+		CLSID_ShellLink);
+	if (!shellLink) {
+		return false;
+	}
+	const auto persistFile = shellLink.try_as<IPersistFile>();
+	if (!persistFile
+		|| !SUCCEEDED(persistFile->Load(native.c_str(), STGM_READ))) {
+		return false;
+	}
+	WCHAR target[MAX_PATH] = {};
+	return SUCCEEDED(shellLink->GetPath(target, MAX_PATH, nullptr, 0))
+		&& AppUserModelId::GetUniqueFileId(target) == myid;
 }
 
 } // namespace
@@ -328,13 +354,17 @@ void psDoFixPrevious() {
 		HRESULT userDesktopRes = SHGetFolderPath(0, CSIDL_DESKTOPDIRECTORY, 0, SHGFP_TYPE_CURRENT, userDesktopFolder);
 		HRESULT commonDesktopRes = SHGetFolderPath(0, CSIDL_COMMON_DESKTOPDIRECTORY, 0, SHGFP_TYPE_CURRENT, commonDesktopFolder);
 		if (SUCCEEDED(userDesktopRes)) {
-			userDesktopLnk = QString::fromWCharArray(userDesktopFolder) + "\\Telegram.lnk";
+			userDesktopLnk = QString::fromStdWString(
+				WindowsAppIdentity::ShortcutPath(userDesktopFolder));
 		}
 		if (SUCCEEDED(commonDesktopRes)) {
-			commonDesktopLnk = QString::fromWCharArray(commonDesktopFolder) + "\\Telegram.lnk";
+			commonDesktopLnk = QString::fromStdWString(
+				WindowsAppIdentity::ShortcutPath(commonDesktopFolder));
 		}
 		QFile userDesktopFile(userDesktopLnk), commonDesktopFile(commonDesktopLnk);
-		if (QFile::exists(userDesktopLnk) && QFile::exists(commonDesktopLnk) && userDesktopLnk != commonDesktopLnk) {
+		if (userDesktopLnk != commonDesktopLnk
+			&& ShortcutTargetsMyExecutable(userDesktopLnk)
+			&& ShortcutTargetsMyExecutable(commonDesktopLnk)) {
 			QFile::remove(commonDesktopLnk);
 		}
 	} catch (...) {
@@ -482,8 +512,8 @@ void AutostartToggle(bool enabled, Fn<void(bool)> done) {
 		silent,
 		FOLDERID_Startup,
 		L"-autostart",
-		L"Telegram autorun link.\n"
-		"You can disable autorun in Telegram settings.");
+		L"FishGram autorun link.\n"
+		"You can disable autorun in FishGram settings.");
 	if (done) {
 		done(enabled && success);
 	}
@@ -750,8 +780,8 @@ void psSendToMenu(bool send, bool silent) {
 		silent,
 		FOLDERID_SendTo,
 		L"--",
-		L"Telegram send to link.\n"
-		"You can disable send to menu item in Telegram settings.");
+		L"FishGram send to link.\n"
+		"You can disable send to menu item in FishGram settings.");
 }
 
 // Stub while we still support Windows 7.

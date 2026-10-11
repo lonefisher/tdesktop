@@ -884,6 +884,11 @@ std::optional<VerifiedUpdate> VerifyUpdate(
 
 	auto result = VerifiedUpdate();
 	const auto heldVersion = held ? held->version : quint32(0);
+	if (held && (carried->version < heldVersion
+		|| (carried->version == heldVersion && carried->bytes != held->bytes))) {
+		SetError(error, QStringLiteral("Key manifest rollback or conflicting version."));
+		return std::nullopt;
+	}
 	if (carried->version > heldVersion) {
 		result.adoptManifest = true;
 		result.manifest = std::move(*carried);

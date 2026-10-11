@@ -22,12 +22,21 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           repository: lonefisher/fishgram
-          ref: 496910e2254f49ce51369b61f740044e7715b068
+          ref: 7dbc44234dbe1a1426afa1e412a1a52ca9ca710b
           path: product
           persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.13'
       - name: Test actual production helpers
         shell: pwsh
-        run: ./product/tools/test-restricted-search.ps1 -SourceRoot "$PWD/source" -OutputDirectory "$PWD/build-tests"
+        run: |
+          ./product/tools/test-restricted-search.ps1 -SourceRoot "$PWD/source" -OutputDirectory "$PWD/build-tests"
+          ./product/tools/test-restricted-search-integration.ps1 -SourceRoot "$PWD/source" -OutputDirectory "$PWD/build-search-integration-tests"
+          ./product/tools/test-update-policy.ps1 -SourceRoot "$PWD/source"
+          ./product/tools/test-update-transaction.ps1 -SourceRoot "$PWD/source"
+          python -m unittest discover -s product/tests -p test_data_recovery.py -v
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
   compile:
     name: Source test identity compile
     if: github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch'
@@ -38,7 +47,7 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           repository: lonefisher/fishgram
-          ref: 496910e2254f49ce51369b61f740044e7715b068
+          ref: 7dbc44234dbe1a1426afa1e412a1a52ca9ca710b
           path: product
           persist-credentials: false
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
@@ -58,8 +67,8 @@ jobs:
           git update-index --cacheinfo "160000,$sha,tdesktop"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $recipe=Get-Content -Raw fishgram.json | ConvertFrom-Json
-          $version=Get-Content -Raw tdesktop/Telegram/SourceFiles/core/version.h
-          if ($version -notmatch 'AppVersionStr\s*=\s*"(\d+\.\d+\.\d+)"') { throw 'Unknown source version' }
+          $version=Get-Content -Raw tdesktop/Telegram/build/version
+          if ($version -notmatch '(?m)^AppVersionStr\s+(\d+\.\d+\.\d+)\s*\r?$') { throw 'Unknown source version' }
           $recipe.upstreamVersion=$Matches[1]
           $recipe.releaseReady=$false
           $recipe | ConvertTo-Json -Depth 4 | Set-Content fishgram.json
@@ -70,4 +79,16 @@ jobs:
       - name: Compile test identity, never upload client or raw logs
         shell: pwsh
         working-directory: product
-        run: ./tools/build-telegram.ps1 -TestIdentity -Parallel 4
+        run: ./tools/build-telegram.ps1 -TestIdentity -TestUpdateSystem -Parallel 4
+      - name: Verify production update packages with disposable test keys
+        shell: pwsh
+        working-directory: product
+        run: ./tools/test-update-verify.ps1
+      - name: Sanitized build diagnostics only
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: source-build-diagnostics
+          path: product/reports/*-diagnostics.json
+          if-no-files-found: ignore
+          retention-days: 7

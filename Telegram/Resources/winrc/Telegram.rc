@@ -21,6 +21,7 @@
 
 /////////////////////////////////////////////////////////////////////////////
 #undef APSTUDIO_READONLY_SYMBOLS
+#include "fishgram_resource_version.h"
 
 /////////////////////////////////////////////////////////////////////////////
 // English (United States) resources
@@ -36,7 +37,7 @@ LANGUAGE LANG_ENGLISH, SUBLANG_ENGLISH_US
 
 // Icon with lowest ID value placed first to ensure application icon
 // remains consistent on all systems.
-IDI_ICON1               ICON                    "..\\art\\icon256.ico"
+IDI_ICON1               ICON                    "..\\fishgram\\fishgram.ico"
 
 /////////////////////////////////////////////////////////////////////////////
 //
@@ -44,8 +45,8 @@ IDI_ICON1               ICON                    "..\\art\\icon256.ico"
 //
 
 VS_VERSION_INFO VERSIONINFO
- FILEVERSION 7,2,9,0
- PRODUCTVERSION 7,2,9,0
+ FILEVERSION FISHGRAM_RESOURCE_NUMERIC
+ PRODUCTVERSION FISHGRAM_RESOURCE_NUMERIC
  FILEFLAGSMASK 0x3fL
 #ifdef _DEBUG
  FILEFLAGS 0x1L
@@ -60,12 +61,12 @@ BEGIN
     BEGIN
         BLOCK "040904b0"
         BEGIN
-            VALUE "CompanyName", "Telegram FZ-LLC"
-            VALUE "FileDescription", "Telegram Desktop"
-            VALUE "FileVersion", "7.2.9.0"
+            VALUE "CompanyName", "FishGram contributors"
+            VALUE "FileDescription", "FishGram - unofficial Telegram client"
+            VALUE "FileVersion", FISHGRAM_RESOURCE_TEXT
             VALUE "LegalCopyright", "Copyright (C) 2014-2026"
-            VALUE "ProductName", "Telegram Desktop"
-            VALUE "ProductVersion", "7.2.9.0"
+            VALUE "ProductName", "FishGram"
+            VALUE "ProductVersion", FISHGRAM_RESOURCE_TEXT
         END
     END
     BLOCK "VarFileInfo"

@@ -20,6 +20,15 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "core/update_channel.h"
 #include "core/update_keys.h"
 #include "core/update_verify.h"
+#include "core/fishgram_update_policy.h"
+#include "core/fishgram_update_feed.h"
+#include "core/fishgram_update_payload.h"
+#ifdef Q_OS_WIN
+#include "_other/fishgram_update_transaction.h"
+#endif
+#include <set>
+#include <atomic>
+#include <QtCore/QCryptographicHash>
 #include "core/version.h"
 #include "data/data_channel.h"
 #include "data/data_session.h"
@@ -38,6 +47,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include <QtCore/QJsonDocument>
 #include <QtCore/QJsonObject>
 #include <QtCore/QFileSystemWatcher>
+#include <QtCore/QSaveFile>
 
 #include <ksandbox.h>
 
@@ -47,12 +57,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include <flatpakportal/flatpakportal.hpp>
 #endif // !Q_OS_WIN && !Q_OS_MAC
 
-extern "C" {
-#include <openssl/rsa.h>
-#include <openssl/pem.h>
-#include <openssl/bio.h>
-#include <openssl/err.h>
-} // extern "C"
 
 #ifndef TDESKTOP_DISABLE_AUTOUPDATE
 #if defined Q_OS_WIN && !defined TDESKTOP_USE_PACKAGED // use Lzma SDK for win
@@ -74,7 +78,7 @@ constexpr auto kMaxResponseSize = 1024 * 1024;
 
 // tdata/version marker for installed v2 canary packages, holding the full
 // 64-bit (base << 32 | counter) version. 0x7FFFFFFF is the alpha marker.
-constexpr auto kVersionFileCanaryMarker = quint32(0x7FFFFFFE);
+constexpr auto kVersionFileFishGramMarker = quint32(0x7FFFFFFD);
 
 #if !defined Q_OS_WIN && !defined Q_OS_MAC
 constexpr auto kFlatpakPortalService = "org.freedesktop.portal.Flatpak";
@@ -95,10 +99,8 @@ using State = UpdateChecker::State;
 
 #ifdef Q_OS_WIN
 using VersionInt = DWORD;
-using VersionChar = WCHAR;
 #else // Q_OS_WIN
 using VersionInt = int;
-using VersionChar = wchar_t;
 #endif // Q_OS_WIN
 
 using Loader = MTP::AbstractDedicatedLoader;
@@ -107,18 +109,6 @@ using Loader = MTP::AbstractDedicatedLoader;
 using namespace gi::repository;
 namespace GObject = gi::repository::GObject;
 #endif // !Q_OS_WIN && !Q_OS_MAC
-
-struct BIODeleter {
-	void operator()(BIO *value) {
-		BIO_free(value);
-	}
-};
-
-inline auto MakeBIO(const void *buf, int len) {
-	return std::unique_ptr<BIO, BIODeleter>{
-		BIO_new_mem_buf(buf, len),
-	};
-}
 
 class Checker : public base::has_weak_ptr {
 public:
@@ -129,7 +119,7 @@ public:
 	virtual bool poll() const;
 
 	rpl::producer<std::shared_ptr<Loader>> ready() const;
-	rpl::producer<> failed() const;
+	rpl::producer<UpdateFailure> failed() const;
 
 	rpl::lifetime &lifetime();
 
@@ -138,12 +128,12 @@ public:
 protected:
 	bool testing() const;
 	void done(std::shared_ptr<Loader> result);
-	void fail();
+	void fail(UpdateFailure reason);
 
 private:
 	bool _testing = false;
 	rpl::event_stream<std::shared_ptr<Loader>> _ready;
-	rpl::event_stream<> _failed;
+	rpl::event_stream<UpdateFailure> _failed;
 
 	rpl::lifetime _lifetime;
 
@@ -153,6 +143,7 @@ struct Implementation {
 	std::unique_ptr<Checker> checker;
 	std::shared_ptr<Loader> loader;
 	bool failed = false;
+	UpdateFailure failure = UpdateFailure::Network;
 
 };
 
@@ -169,13 +160,10 @@ private:
 	void gotFailure(QNetworkReply::NetworkError e);
 	void clearSentRequest();
 	bool handleResponse(const QByteArray &response);
-	std::optional<QString> parseOldResponse(
-		const QByteArray &response) const;
-	std::optional<QString> parseResponse(const QByteArray &response) const;
-	QString validateLatestUrl(
-		uint64 availableVersion,
-		bool isAvailableAlpha,
-		QString url) const;
+    enum class Request { Manifest, ManifestSignature, Feed };
+    void request(Request step);
+    Request _request = Request::Manifest;
+    QByteArray _manifestBytes;
 
 	std::unique_ptr<QNetworkAccessManager> _manager;
 	QNetworkReply *_reply = nullptr;
@@ -184,9 +172,19 @@ private:
 
 class HttpLoaderActor;
 
+// All installed desktop instances use FishGram's HTTP source. MTP's abstract
+// loader remains a transport helper, not an update discovery fallback.
+
 class HttpLoader : public Loader {
 public:
-	HttpLoader(const QString &url);
+	HttpLoader(FishGramUpdates::Candidate candidate);
+    const FishGramUpdates::Candidate &candidate() const { return _candidate; }
+	void setFailure(UpdateFailure failure) {
+		_failure.store(failure, std::memory_order_relaxed);
+	}
+	UpdateFailure failure() const {
+		return _failure.load(std::memory_order_relaxed);
+	}
 
 	~HttpLoader();
 
@@ -196,8 +194,10 @@ private:
 	friend class HttpLoaderActor;
 
 	QString _url;
+    FishGramUpdates::Candidate _candidate;
 	std::unique_ptr<QThread> _thread;
 	HttpLoaderActor *_actor = nullptr;
+	std::atomic<UpdateFailure> _failure = UpdateFailure::Download;
 
 };
 
@@ -220,45 +220,6 @@ private:
 	QString _url;
 	QNetworkAccessManager _manager;
 	std::unique_ptr<QNetworkReply> _reply;
-
-};
-
-class MtpChecker : public Checker {
-public:
-	MtpChecker(base::weak_ptr<Main::Session> session, bool testing);
-
-	void start() override;
-
-private:
-	using FileLocation = MTP::DedicatedLoader::Location;
-
-	using Checker::fail;
-	Fn<void(const MTP::Error &error)> failHandler();
-
-	void gotMessage(const MTPmessages_Messages &result);
-	std::optional<FileLocation> parseMessage(
-		const MTPmessages_Messages &result) const;
-	std::optional<FileLocation> parseText(const QByteArray &text) const;
-	FileLocation validateLatestLocation(
-		uint64 availableVersion,
-		const FileLocation &location) const;
-
-	void startCanary();
-	void requestCanaryMetadata(
-		const MTPInputChannel &channel,
-		int messageId,
-		bool fallbackToPinned);
-	void requestCanaryPinnedFallback(const MTPInputChannel &channel);
-	void gotCanaryMessage(
-		const MTPInputChannel &channel,
-		const MTPmessages_Messages &result,
-		int messageId,
-		bool fallbackToPinned);
-	void parseCanaryMetadata(
-		const MTPInputChannel &channel,
-		const QByteArray &text);
-
-	MTP::WeakInstance _mtp;
 
 };
 
@@ -305,26 +266,6 @@ std::shared_ptr<Updater> GetUpdaterInstance() {
 	return result;
 }
 
-[[nodiscard]] base::weak_ptr<Main::Session> LookupCanaryPrivateSession(
-		base::weak_ptr<Main::Session> fallback) {
-	if (BuildUpdateChannel != Updates::Channel::CanaryPrivate
-		|| !CanaryPrivateChannelId
-		|| !IsAppLaunched()
-		|| !App().domain().started()) {
-		return fallback;
-	}
-	for (const auto &[index, account] : App().domain().accounts()) {
-		if (const auto session = account->maybeSession()) {
-			const auto channel = session->data().channelLoaded(
-				ChannelId(BareId(CanaryPrivateChannelId)));
-			if (channel && channel->amIn()) {
-				return base::make_weak(session);
-			}
-		}
-	}
-	return fallback;
-}
-
 QString UpdatesFolder() {
 	return cWorkingDir() + u"tupdates"_q;
 }
@@ -341,23 +282,8 @@ QString FindUpdateFile() {
 	const auto list = updates.entryInfoList(QDir::Files);
 	for (const auto &info : list) {
 		static const auto RegExp = QRegularExpression(
-			"^("
-			"tupdate|"
-			"tx64upd|"
-			"tarm64upd|"
-			"tmacupd|"
-			"tarmacupd|"
-			"tlinuxupd|"
-			")\\d+(_[a-z\\d]+)?$",
-			QRegularExpression::CaseInsensitiveOption
-		);
-		static const auto RegExpV2 = QRegularExpression(
-			"^td-update-(win|mac|linux)-(x86|x64|arm)-\\d+"
-			"(-beta|-canary-\\d+(-private)?)?$",
-			QRegularExpression::CaseInsensitiveOption
-		);
-		if (RegExp.match(info.fileName()).hasMatch()
-			|| RegExpV2.match(info.fileName()).hasMatch()) {
+            "^fishgram-update-win-x64-[1-9][0-9]*-r[1-9][0-9]*(-beta)?$");
+        if (RegExp.match(info.fileName()).hasMatch()) {
 			return info.absoluteFilePath();
 		}
 	}
@@ -498,6 +424,8 @@ QString ExtractFilename(const QString &url) {
 		QDataStream &stream,
 		quint32 filesCount,
 		const QString &tempDirPath) {
+    if (filesCount < 2 || filesCount > 128) return false;
+    std::set<QString> names;
 	for (uint32 i = 0; i < filesCount; ++i) {
 		QString relativeName;
 		quint32 fileSize;
@@ -517,6 +445,12 @@ QString ExtractFilename(const QString &url) {
 			return false;
 		}
 
+        const auto encoded = relativeName.toUtf8();
+        if (!FishGramUpdates::IsSafePayloadName(std::string_view(encoded.constData(), std::size_t(encoded.size())))
+            || !names.insert(relativeName.toLower()).second) {
+            LOG(("FishGram Update Error: unsafe or duplicate payload name."));
+            return false;
+        }
 		QFile f(tempDirPath + '/' + relativeName);
 		if (!QDir().mkpath(QFileInfo(f).absolutePath())) {
 			LOG(("Update Error: cant mkpath for file '%1'").arg(tempDirPath + '/' + relativeName));
@@ -539,63 +473,30 @@ QString ExtractFilename(const QString &url) {
 			f.setPermissions(p);
 		}
 	}
-	return true;
+	return names.contains(QStringLiteral("telegram.exe")) && names.contains(QStringLiteral("updater.exe"))
+        && stream.atEnd();
 }
 
 [[nodiscard]] bool WriteUpdateVersionFile(
-		QDir &tempDir,
-		const QString &tempDirPath,
-		quint32 version,
-		quint64 alphaVersion,
-		quint64 canaryVersion) {
-	// create tdata/version file
-	tempDir.mkdir(QDir(tempDirPath + u"/tdata"_q).absolutePath());
-	std::wstring versionString = FormatVersionDisplay(version).toStdWString();
-
-	const auto versionNum = canaryVersion
-		? VersionInt(kVersionFileCanaryMarker)
-		: VersionInt(version);
-	const auto versionLen = VersionInt(versionString.size() * sizeof(VersionChar));
-	VersionChar versionStr[32];
-	memcpy(versionStr, versionString.c_str(), versionLen);
-
-	QFile fVersion(tempDirPath + u"/tdata/version"_q);
-	if (!fVersion.open(QIODevice::WriteOnly)) {
-		LOG(("Update Error: cant write version file '%1'").arg(tempDirPath + u"/version"_q));
-		return false;
-	}
-	fVersion.write((const char*)&versionNum, sizeof(VersionInt));
-	if (canaryVersion) {
-		fVersion.write((const char*)&canaryVersion, sizeof(quint64));
-	} else if (versionNum == 0x7FFFFFFF) { // alpha version
-		fVersion.write((const char*)&alphaVersion, sizeof(quint64));
-	} else {
-		fVersion.write((const char*)&versionLen, sizeof(VersionInt));
-		fVersion.write((const char*)&versionStr[0], versionLen);
-	}
-	fVersion.close();
-	return true;
+        QDir &,
+        const QString &tempDirPath,
+        quint64 fullVersion,
+        Updates::Channel channel) {
+    const auto marker = VersionInt(kVersionFileFishGramMarker);
+    const auto channelValue = VersionInt(channel);
+    QSaveFile ready(tempDirPath + u"/ready"_q);
+    return ready.open(QIODevice::WriteOnly)
+        && ready.write(reinterpret_cast<const char*>(&marker), sizeof(marker)) == sizeof(marker)
+        && ready.write(reinterpret_cast<const char*>(&fullVersion), sizeof(fullVersion)) == sizeof(fullVersion)
+        && ready.write(reinterpret_cast<const char*>(&channelValue), sizeof(channelValue)) == sizeof(channelValue)
+        && ready.commit();
 }
 
-[[nodiscard]] bool WriteUpdateReadyFile(const QString &readyFilePath) {
-	QFile readyFile(readyFilePath);
-	if (readyFile.open(QIODevice::WriteOnly)) {
-		if (readyFile.write("1", 1)) {
-			readyFile.close();
-		} else {
-			LOG(("Update Error: cant write ready file '%1'").arg(readyFilePath));
-			return false;
-		}
-	} else {
-		LOG(("Update Error: cant create ready file '%1'").arg(readyFilePath));
-		return false;
-	}
-	return true;
-}
-
-[[nodiscard]] bool UnpackUpdateV2(
+	[[nodiscard]] bool UnpackUpdateV2(
 		const QString &filepath,
-		const QByteArray &content) {
+		const QByteArray &content,
+		UpdateFailure *failure) {
+	if (failure) *failure = UpdateFailure::Staging;
 	// The expected target follows the feed key, not the build: an x64
 	// build under Rosetta asks for armac and must accept that package.
 	const auto target = Updates::TargetFromPlatformKey(
@@ -621,6 +522,16 @@ QString ExtractFilename(const QString &url) {
 		&error);
 	if (!verified) {
 		LOG(("Update Error: v2 update rejected: %1").arg(error));
+		if (failure) {
+			const auto authorizationFailure = error.contains(
+				u"signature"_q,
+				Qt::CaseInsensitive)
+				|| error.contains(u"manifest"_q, Qt::CaseInsensitive)
+				|| error.contains(u"key"_q, Qt::CaseInsensitive);
+			*failure = authorizationFailure
+				? UpdateFailure::Signature
+				: UpdateFailure::DownloadValidation;
+		}
 		return false;
 	}
 	if (verified->adoptManifest) {
@@ -631,6 +542,16 @@ QString ExtractFilename(const QString &url) {
 
 	const auto tempDirPath = cWorkingDir() + u"tupdates/temp"_q;
 	const auto readyFilePath = cWorkingDir() + u"tupdates/temp/ready"_q;
+#ifdef Q_OS_WIN
+	std::wstring work;
+	if (!FishGramUpdates::WindowsTransaction::Details::CanonicalDirectory(
+		QDir::toNativeSeparators(cWorkingDir()).toStdWString(), &work)
+		|| !FishGramUpdates::WindowsTransaction::Details::EnsureDirectory(
+			FishGramUpdates::WindowsTransaction::Details::Join(work, L"tupdates"))) return false;
+	const auto staged = FishGramUpdates::WindowsTransaction::Details::Join(work, L"tupdates\\temp");
+	if (!FishGramUpdates::WindowsTransaction::Details::IsAbsent(staged)
+		&& !FishGramUpdates::WindowsTransaction::Details::IsSafeDirectory(staged)) return false;
+#endif
 	base::Platform::DeleteDirectory(tempDirPath);
 
 	QDir tempDir(tempDirPath);
@@ -649,9 +570,34 @@ QString ExtractFilename(const QString &url) {
 
 	tempDir.mkdir(tempDir.absolutePath());
 
-	const auto canary
-		= (verified->envelope.channel == Updates::Channel::CanaryPublic)
-		|| (verified->envelope.channel == Updates::Channel::CanaryPrivate);
+#ifdef Q_OS_WIN
+	// Installation re-verifies this exact v2 package under the installed root.
+	// Persist the latest held key authorization outside the untrusted workdir.
+	namespace Transaction = FishGramUpdates::WindowsTransaction;
+	std::wstring install, meta, versions;
+	if (!Transaction::Details::CanonicalDirectory(QDir::toNativeSeparators(cExeDir()).toStdWString(), &install)
+		|| !Transaction::Details::PrepareMetadata(install, &meta, &versions)) return false;
+	Transaction::Details::InstallLock installLock;
+	Transaction::Result lockFailure = Transaction::Result::IoError;
+	if (!Transaction::Details::AcquireLock(meta, &installLock, &lockFailure)) return false;
+	const auto trustPath = QString::fromStdWString(Transaction::Details::Join(meta, L"held-trust"));
+	QFile priorTrust(trustPath);
+	if (priorTrust.exists()) {
+		std::uint64_t trustSize = 0;
+		if (!Transaction::Details::FileSize(trustPath.toStdWString(), &trustSize)) return false;
+		if (!priorTrust.open(QIODevice::ReadOnly) || priorTrust.size() > 1024 * 1024) return false;
+		const auto prior = FishGramUpdates::ReadVerifiedTrustRecord(priorTrust.readAll(), Updates::RootPublicKeyPem());
+		if (!prior || prior->version > verified->manifest.version
+			|| (prior->version == verified->manifest.version && prior->bytes != verified->manifest.bytes)) return false;
+		priorTrust.close();
+	}
+	QSaveFile trustFile(trustPath);
+	const auto trustRecord = FishGramUpdates::EncodeTrustRecord(verified->manifest);
+	if (!trustFile.open(QIODevice::WriteOnly) || trustFile.write(trustRecord) != trustRecord.size() || !trustFile.commit()) return false;
+	QSaveFile packageFile(cWorkingDir() + u"tupdates/package.v2"_q);
+	if (!packageFile.open(QIODevice::WriteOnly) || packageFile.write(content) != content.size() || !packageFile.commit()) return false;
+#endif
+
 	{
 		QDataStream stream(*uncompressed);
 		stream.setVersion(QDataStream::Qt_5_1);
@@ -675,16 +621,12 @@ QString ExtractFilename(const QString &url) {
 			|| !WriteUpdateVersionFile(
 				tempDir,
 				tempDirPath,
-				version,
-				0,
-				canary ? verified->envelope.version : 0)) {
+				verified->envelope.version,
+                verified->envelope.channel)) {
 			return false;
 		}
 	}
 
-	if (!WriteUpdateReadyFile(readyFilePath)) {
-		return false;
-	}
 	QFile(filepath).remove();
 
 	return true;
@@ -692,268 +634,34 @@ QString ExtractFilename(const QString &url) {
 
 #endif // !TDESKTOP_DISABLE_AUTOUPDATE
 
-bool UnpackUpdate(const QString &filepath) {
+bool UnpackUpdate(
+		const QString &filepath,
+		const FishGramUpdates::Candidate &candidate,
+		UpdateFailure *failure) {
+    if (failure) *failure = UpdateFailure::DownloadValidation;
 #ifndef TDESKTOP_DISABLE_AUTOUPDATE
-	if (filepath.isEmpty()) {
-		return true;
-	}
-
-	QFile input(filepath);
-	if (!input.open(QIODevice::ReadOnly)) {
-		LOG(("Update Error: cant read updates file!"));
-		return false;
-	} else if (input.size() > Loader::kMaxFileSize) {
-		LOG(("Update Error: updates file is too large: %1").arg(input.size()));
-		return false;
-	}
-
-#if defined Q_OS_WIN && !defined TDESKTOP_USE_PACKAGED // use Lzma SDK for win
-	const int32 hSigLen = 128, hShaLen = 20, hPropsLen = LZMA_PROPS_SIZE, hOriginalSizeLen = sizeof(int32), hSize = hSigLen + hShaLen + hPropsLen + hOriginalSizeLen; // header
-#else // Q_OS_WIN && !TDESKTOP_USE_PACKAGED
-	const int32 hSigLen = 128, hShaLen = 20, hPropsLen = 0, hOriginalSizeLen = sizeof(int32), hSize = hSigLen + hShaLen + hOriginalSizeLen; // header
-#endif // Q_OS_WIN && !TDESKTOP_USE_PACKAGED
-
-	QByteArray compressed = input.readAll();
-	input.close();
-
-	if (Updates::IsV2UpdateFile(compressed)) {
-		if (UnpackUpdateV2(filepath, compressed)) {
-			return true;
-		} else if (BuildIsCanary) {
-			return false;
-		}
-		// A v1 file whose RSA signature happens to begin with the magic
-		// bytes lands here too, so a failed v2 parse falls through to the
-		// v1 path below: it accepts nothing without a valid RSA signature
-		// over these same bytes.
-		LOG(("Update Info: trying v1 unpacking for a file with v2 magic."));
-	} else if (BuildIsCanary) {
-		// The channel policy lives in the v2 envelope only, a classical
-		// RSA package has no channel and would let any official v1 file
-		// posted to the canary channel jump a canary off its lane.
-		LOG(("Update Error: canary builds accept only v2 updates."));
-		return false;
-	}
-
-	int32 compressedLen = compressed.size() - hSize;
-	if (compressedLen <= 0) {
-		LOG(("Update Error: bad compressed size: %1").arg(compressed.size()));
-		return false;
-	}
-
-	QString tempDirPath = cWorkingDir() + u"tupdates/temp"_q, readyFilePath = cWorkingDir() + u"tupdates/temp/ready"_q;
-	base::Platform::DeleteDirectory(tempDirPath);
-
-	QDir tempDir(tempDirPath);
-	if (tempDir.exists() || QFile(readyFilePath).exists()) {
-		LOG(("Update Error: cant clear tupdates/temp dir!"));
-		return false;
-	}
-
-	uchar sha1Buffer[20];
-	bool goodSha1 = !memcmp(compressed.constData() + hSigLen, hashSha1(compressed.constData() + hSigLen + hShaLen, compressedLen + hPropsLen + hOriginalSizeLen, sha1Buffer), hShaLen);
-	if (!goodSha1) {
-		LOG(("Update Error: bad SHA1 hash of update file!"));
-		return false;
-	}
-
-	RSA *pbKey = [] {
-		const auto bio = MakeBIO(
-			const_cast<char*>(
-				AppBetaVersion
-					? UpdatesPublicBetaKey
-					: UpdatesPublicKey),
-			-1);
-		return PEM_read_bio_RSAPublicKey(bio.get(), 0, 0, 0);
-	}();
-	if (!pbKey) {
-		LOG(("Update Error: cant read public rsa key!"));
-		return false;
-	}
-	if (RSA_verify(NID_sha1, (const uchar*)(compressed.constData() + hSigLen), hShaLen, (const uchar*)(compressed.constData()), hSigLen, pbKey) != 1) { // verify signature
-		RSA_free(pbKey);
-
-		// try other public key, if we update from beta to stable or vice versa
-		pbKey = [] {
-			const auto bio = MakeBIO(
-				const_cast<char*>(
-					AppBetaVersion
-						? UpdatesPublicKey
-						: UpdatesPublicBetaKey),
-				-1);
-			return PEM_read_bio_RSAPublicKey(bio.get(), 0, 0, 0);
-		}();
-		if (!pbKey) {
-			LOG(("Update Error: cant read public rsa key!"));
-			return false;
-		}
-		if (RSA_verify(NID_sha1, (const uchar*)(compressed.constData() + hSigLen), hShaLen, (const uchar*)(compressed.constData()), hSigLen, pbKey) != 1) { // verify signature
-			RSA_free(pbKey);
-			LOG(("Update Error: bad RSA signature of update file!"));
-			return false;
-		}
-	}
-	RSA_free(pbKey);
-
-	const auto uncompressed = DecompressUpdatePayload(
-		compressed.constData() + hSigLen + hShaLen,
-		compressed.size() - hSigLen - hShaLen);
-	if (!uncompressed) {
-		return false;
-	}
-
-	tempDir.mkdir(tempDir.absolutePath());
-
-	quint32 version;
-	{
-		QDataStream stream(*uncompressed);
-		stream.setVersion(QDataStream::Qt_5_1);
-
-		stream >> version;
-		if (stream.status() != QDataStream::Ok) {
-			LOG(("Update Error: cant read version from downloaded stream, status: %1").arg(stream.status()));
-			return false;
-		}
-
-		quint64 alphaVersion = 0;
-		if (version == 0x7FFFFFFF) { // alpha version
-			stream >> alphaVersion;
-			if (stream.status() != QDataStream::Ok) {
-				LOG(("Update Error: cant read alpha version from downloaded stream, status: %1").arg(stream.status()));
-				return false;
-			}
-			if (!cAlphaVersion() || alphaVersion <= cAlphaVersion()) {
-				LOG(("Update Error: downloaded alpha version %1 is not greater, than mine %2").arg(alphaVersion).arg(cAlphaVersion()));
-				return false;
-			}
-		} else if (int32(version) <= AppVersion) {
-			LOG(("Update Error: downloaded version %1 is not greater, than mine %2").arg(version).arg(AppVersion));
-			return false;
-		}
-
-		quint32 filesCount;
-		stream >> filesCount;
-		if (stream.status() != QDataStream::Ok) {
-			LOG(("Update Error: cant read files count from downloaded stream, status: %1").arg(stream.status()));
-			return false;
-		}
-		if (!filesCount) {
-			LOG(("Update Error: update is empty!"));
-			return false;
-		}
-		if (!ExtractUpdateFiles(stream, filesCount, tempDirPath)
-			|| !WriteUpdateVersionFile(
-				tempDir,
-				tempDirPath,
-				version,
-				alphaVersion,
-				0)) {
-			return false;
-		}
-	}
-
-	if (!WriteUpdateReadyFile(readyFilePath)) {
-		return false;
-	}
-	input.remove();
-
-	return true;
-#else // !TDESKTOP_DISABLE_AUTOUPDATE
-	return false;
-#endif // TDESKTOP_DISABLE_AUTOUPDATE
-}
-
-template <typename Callback>
-bool ParseCommonMap(
-		const QByteArray &json,
-		bool testing,
-		Callback &&callback) {
-	auto error = QJsonParseError{ 0, QJsonParseError::NoError };
-	const auto document = QJsonDocument::fromJson(json, &error);
-	if (error.error != QJsonParseError::NoError) {
-		LOG(("Update Error: MTP failed to parse JSON, error: %1"
-			).arg(error.errorString()));
-		return false;
-	} else if (!document.isObject()) {
-		LOG(("Update Error: MTP not an object received in JSON."));
-		return false;
-	}
-	const auto platforms = document.object();
-	const auto platform = Platform::AutoUpdateKey();
-	const auto it = platforms.constFind(platform);
-	if (it == platforms.constEnd()) {
-		LOG(("Update Error: MTP platform '%1' not found in response."
-			).arg(platform));
-		return false;
-	} else if (!(*it).isObject()) {
-		LOG(("Update Error: MTP not an object found for platform '%1'."
-			).arg(platform));
-		return false;
-	}
-	const auto types = (*it).toObject();
-	const auto list = [&]() -> std::vector<QString> {
-		if (cAlphaVersion()) {
-			return { "alpha", "beta", "stable" };
-		} else if (cInstallBetaVersion()) {
-			return { "beta", "stable" };
-		}
-		return { "stable" };
-	}();
-	auto bestIsAvailableAlpha = false;
-	auto bestAvailableVersion = 0ULL;
-	for (const auto &type : list) {
-		const auto it = types.constFind(type);
-		if (it == types.constEnd()) {
-			continue;
-		} else if (!(*it).isObject()) {
-			LOG(("Update Error: Not an object found for '%1:%2'."
-				).arg(platform).arg(type));
-			return false;
-		}
-		const auto map = (*it).toObject();
-		const auto key = testing ? "testing" : "released";
-		const auto version = map.constFind(key);
-		if (version == map.constEnd()) {
-			continue;
-		}
-		const auto isAvailableAlpha = (type == "alpha");
-		const auto availableVersion = [&] {
-			if ((*version).isString()) {
-				const auto string = (*version).toString();
-				if (const auto index = string.indexOf(':'); index > 0) {
-					return base::StringViewMid(string, 0, index).toULongLong();
-				}
-				return string.toULongLong();
-			} else if ((*version).isDouble()) {
-				return uint64(base::SafeRound((*version).toDouble()));
-			}
-			return 0ULL;
-		}();
-		if (!availableVersion) {
-			LOG(("Update Error: Version is not valid for '%1:%2:%3'."
-				).arg(platform).arg(type).arg(key));
-			return false;
-		}
-		const auto compare = isAvailableAlpha
-			? availableVersion
-			: availableVersion * 1000;
-		const auto bestCompare = bestIsAvailableAlpha
-			? bestAvailableVersion
-			: bestAvailableVersion * 1000;
-		if (compare > bestCompare) {
-			bestAvailableVersion = availableVersion;
-			bestIsAvailableAlpha = isAvailableAlpha;
-			if (!callback(availableVersion, isAvailableAlpha, map)) {
-				return false;
-			}
-		}
-	}
-	if (!bestAvailableVersion) {
-		LOG(("Update Error: No valid entry found for platform '%1'."
-			).arg(platform));
-		return false;
-	}
-	return true;
+    QFile input(filepath);
+    if (filepath.isEmpty() || !input.open(QIODevice::ReadOnly)
+        || input.size() != qint64(candidate.size) || input.size() > Loader::kMaxFileSize) {
+        LOG(("FishGram Update Error: package size or download file is invalid."));
+        return false;
+    }
+    const auto content = input.readAll();
+    input.close();
+    if (!FishGramUpdates::MatchesDownload(candidate, content) || !Updates::IsV2UpdateFile(content)) {
+        LOG(("FishGram Update Error: package hash or v2 format is invalid."));
+        return false;
+    }
+    const auto envelope = Updates::ParseEnvelope(content);
+    if (!envelope || envelope->version != candidate.version
+        || Updates::ChannelName(envelope->channel) != candidate.channel.toLatin1()) {
+        LOG(("FishGram Update Error: signed channel or full version does not match discovery."));
+        return false;
+    }
+    return UnpackUpdateV2(filepath, content, failure);
+#else
+    return false;
+#endif
 }
 
 Checker::Checker(bool testing) : _testing(testing) {
@@ -963,7 +671,7 @@ rpl::producer<std::shared_ptr<Loader>> Checker::ready() const {
 	return _ready.events();
 }
 
-rpl::producer<> Checker::failed() const {
+rpl::producer<UpdateFailure> Checker::failed() const {
 	return _failed.events();
 }
 
@@ -979,8 +687,8 @@ void Checker::done(std::shared_ptr<Loader> result) {
 	_ready.fire(std::move(result));
 }
 
-void Checker::fail() {
-	_failed.fire({});
+void Checker::fail(UpdateFailure reason) {
+	_failed.fire_copy(reason);
 }
 
 rpl::lifetime &Checker::lifetime() {
@@ -991,49 +699,97 @@ HttpChecker::HttpChecker(bool testing) : Checker(testing) {
 }
 
 void HttpChecker::start() {
-	const auto updaterVersion = Platform::AutoUpdateVersion();
-	const auto path = Local::readAutoupdatePrefix()
-		+ qstr("/current")
-		+ (updaterVersion > 1 ? QString::number(updaterVersion) : QString());
-	auto url = QUrl(path);
-	DEBUG_LOG(("Update Info: requesting update state"));
-	const auto request = QNetworkRequest(url);
-	_manager = std::make_unique<QNetworkAccessManager>();
-	_reply = _manager->get(request);
-	_reply->connect(_reply, &QNetworkReply::finished, [=] {
-		gotResponse();
-	});
-	_reply->connect(_reply, &QNetworkReply::errorOccurred, [=](auto e) {
-		gotFailure(e);
-	});
+    if (Updates::RootPublicKeyPem().isEmpty()) {
+        fail(UpdateFailure::NotConfigured);
+        return;
+    }
+    request(Request::Manifest);
+}
+
+void HttpChecker::request(Request step) {
+    _request = step;
+    const auto suffix = (step == Request::Manifest)
+        ? QStringLiteral("keys/manifest.min.json")
+        : (step == Request::ManifestSignature)
+        ? QStringLiteral("keys/manifest.sig")
+        : QStringLiteral("channels/%1/windows-x64.json").arg(
+            (BuildUpdateChannel == Updates::Channel::Beta || cInstallBetaVersion()) ? "beta" : "stable");
+    const auto url = QUrl(QStringLiteral("https://lonefisher.github.io/fishgram/") + suffix);
+    auto networkRequest = QNetworkRequest(url);
+    networkRequest.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::NoLessSafeRedirectPolicy);
+    _manager = std::make_unique<QNetworkAccessManager>();
+    _reply = _manager->get(networkRequest);
+    _reply->connect(_reply, &QNetworkReply::finished, [=] { gotResponse(); });
+    _reply->connect(_reply, &QNetworkReply::errorOccurred, [=](auto e) { gotFailure(e); });
 }
 
 void HttpChecker::gotResponse() {
-	if (!_reply) {
-		return;
-	}
-
-	cSetLastUpdateCheck(base::unixtime::now());
-	const auto response = _reply->readAll();
-	clearSentRequest();
-
-	if (response.size() >= kMaxResponseSize || !handleResponse(response)) {
-		LOG(("Update Error: Bad update map size: %1").arg(response.size()));
-		gotFailure(QNetworkReply::UnknownContentError);
-	}
+    if (!_reply) return;
+    const auto status = _reply->attribute(
+		QNetworkRequest::HttpStatusCodeAttribute);
+    if (status.isValid() && status.toInt() != 200) {
+        clearSentRequest();
+        fail(UpdateFailure::Network);
+        return;
+    }
+    if (_reply->error() != QNetworkReply::NoError) {
+        gotFailure(_reply->error());
+        return;
+    }
+    if (!status.isValid()) {
+        clearSentRequest();
+        fail(UpdateFailure::Network);
+        return;
+    }
+    const auto response = _reply->readAll();
+    clearSentRequest();
+    if (response.size() >= kMaxResponseSize) {
+        fail(FailureForInvalidResponse(_request == Request::Feed
+			? UpdateRequestStage::Index
+			: (_request == Request::ManifestSignature
+				? UpdateRequestStage::ManifestSignature
+				: UpdateRequestStage::Manifest)));
+        return;
+    }
+    if (_request == Request::Manifest) {
+        _manifestBytes = response;
+        request(Request::ManifestSignature);
+    } else if (_request == Request::ManifestSignature) {
+        auto manifestError = QString();
+        const auto manifest = Updates::ParseVerifiedManifest(
+            _manifestBytes,
+            response,
+            Updates::RootPublicKeyPem(),
+            &manifestError);
+        const auto held = HeldManifest();
+        if (!manifest || (held && (manifest->version < held->version
+            || (manifest->version == held->version && manifest->bytes != held->bytes)))) {
+            LOG(("FishGram Update Error: key manifest verification or monotonic version failed."));
+            fail(FailureForInvalidResponse(manifestError.contains(
+				u"signature"_q,
+				Qt::CaseInsensitive)
+				? UpdateRequestStage::ManifestSignature
+				: UpdateRequestStage::Manifest));
+            return;
+        }
+        AdoptManifest(*manifest);
+        request(Request::Feed);
+    } else if (!handleResponse(response)) {
+        fail(UpdateFailure::Index);
+    }
 }
 
 bool HttpChecker::handleResponse(const QByteArray &response) {
-	const auto handle = [&](const QString &url) {
-		done(url.isEmpty() ? nullptr : std::make_shared<HttpLoader>(url));
-		return true;
-	};
-	if (const auto url = parseOldResponse(response)) {
-		return handle(*url);
-	} else if (const auto url = parseResponse(response)) {
-		return handle(*url);
-	}
-	return false;
+    auto error = QString();
+    const auto channel = (BuildUpdateChannel == Updates::Channel::Beta || cInstallBetaVersion())
+        ? QStringLiteral("beta") : QStringLiteral("stable");
+    const auto feed = FishGramUpdates::ParseFeed(response, channel, RunningUpdateVersion(), &error);
+    if (!feed) {
+        LOG(("FishGram Update Error: %1").arg(error));
+        return false;
+    }
+    done(feed->candidate ? std::make_shared<HttpLoader>(*feed->candidate) : nullptr);
+    return true;
 }
 
 void HttpChecker::clearSentRequest() {
@@ -1048,97 +804,31 @@ void HttpChecker::clearSentRequest() {
 	_manager = nullptr;
 }
 
-void HttpChecker::gotFailure(QNetworkReply::NetworkError e) {
-	LOG(("Update Error: "
-		"could not get current version %1").arg(e));
-	if (const auto reply = base::take(_reply)) {
-		reply->deleteLater();
-	}
-
-	fail();
-}
-
-std::optional<QString> HttpChecker::parseOldResponse(
-		const QByteArray &response) const {
-	const auto string = QString::fromLatin1(response);
-	const auto old = QRegularExpression(
-		u"^\\s*(\\d+)\\s*:\\s*([\\x21-\\x7f]+)\\s*$"_q
-	).match(string);
-	if (!old.hasMatch()) {
-		return std::nullopt;
-	}
-	const auto availableVersion = old.captured(1).toULongLong();
-	const auto url = old.captured(2);
-	const auto isAvailableAlpha = url.startsWith(qstr("beta_"));
-	return validateLatestUrl(
-		availableVersion,
-		isAvailableAlpha,
-		isAvailableAlpha ? url.mid(5) + "_{signature}" : url);
-}
-
-std::optional<QString> HttpChecker::parseResponse(
-		const QByteArray &response) const {
-	auto bestAvailableVersion = 0ULL;
-	auto bestIsAvailableAlpha = false;
-	auto bestLink = QString();
-	const auto accumulate = [&](
-			uint64 version,
-			bool isAlpha,
-			const QJsonObject &map) {
-		bestAvailableVersion = version;
-		bestIsAvailableAlpha = isAlpha;
-		const auto link = map.constFind("link");
-		if (link == map.constEnd()) {
-			LOG(("Update Error: Link not found for version %1."
-				).arg(version));
-			return false;
-		} else if (!(*link).isString()) {
-			LOG(("Update Error: Link is not a string for version %1."
-				).arg(version));
-			return false;
-		}
-		bestLink = (*link).toString();
-		return true;
-	};
-	const auto result = ParseCommonMap(response, testing(), accumulate);
-	if (!result) {
-		return std::nullopt;
-	}
-	return validateLatestUrl(
-		bestAvailableVersion,
-		bestIsAvailableAlpha,
-		Local::readAutoupdatePrefix() + bestLink);
-}
-
-QString HttpChecker::validateLatestUrl(
-		uint64 availableVersion,
-		bool isAvailableAlpha,
-		QString url) const {
-	const auto myVersion = isAvailableAlpha
-		? cAlphaVersion()
-		: uint64(AppVersion);
-	const auto validVersion = (cAlphaVersion() || !isAvailableAlpha);
-	if (!validVersion || availableVersion <= myVersion) {
-		return QString();
-	}
-	const auto versionUrl = url.replace(
-		"{version}",
-		QString::number(availableVersion));
-	const auto finalUrl = isAvailableAlpha
-		? QString(versionUrl).replace(
-			"{signature}",
-			countAlphaVersionSignature(availableVersion))
-		: versionUrl;
-	return finalUrl;
-}
-
 HttpChecker::~HttpChecker() {
 	clearSentRequest();
 }
 
-HttpLoader::HttpLoader(const QString &url)
-: Loader(UpdatesFolder() + '/' + ExtractFilename(url), kChunkSize)
-, _url(url) {
+void HttpChecker::gotFailure(QNetworkReply::NetworkError e) {
+	LOG(("Update Error: "
+		"could not get current version %1").arg(e));
+	const auto status = _reply
+		? _reply->attribute(QNetworkRequest::HttpStatusCodeAttribute)
+		: QVariant();
+	if (const auto reply = base::take(_reply)) {
+		reply->deleteLater();
+	}
+	if (status.isValid() && status.toInt() != 200) {
+		fail(UpdateFailure::Network);
+		return;
+	}
+
+	fail(FailureForRequestError(e == QNetworkReply::TimeoutError));
+}
+
+HttpLoader::HttpLoader(FishGramUpdates::Candidate candidate)
+: Loader(UpdatesFolder() + '/' + ExtractFilename(candidate.url), kChunkSize)
+, _url(candidate.url)
+, _candidate(std::move(candidate)) {
 }
 
 void HttpLoader::startLoading() {
@@ -1212,7 +902,11 @@ void HttpLoaderActor::gotMetaData() {
 		if (QString::fromUtf8(pair.first).toLower() == "content-range") {
 			const auto m = QRegularExpression(u"/(\\d+)([^\\d]|$)"_q).match(QString::fromUtf8(pair.second));
 			if (m.hasMatch()) {
-				_parent->writeChunk({}, m.captured(1).toLongLong());
+				const auto total = m.captured(1).toLongLong();
+				if (total > Loader::kMaxFileSize) {
+					_parent->setFailure(UpdateFailure::DownloadValidation);
+				}
+				_parent->writeChunk({}, total);
 			}
 		}
 	}
@@ -1229,6 +923,7 @@ void HttpLoaderActor::partFinished(qint64 got, qint64 total) {
 			LOG(("Update Error: "
 				"Bad HTTP status received in partFinished(): %1"
 				).arg(status));
+			_parent->setFailure(UpdateFailure::Download);
 			_parent->threadSafeFailed();
 			return;
 		}
@@ -1237,6 +932,11 @@ void HttpLoaderActor::partFinished(qint64 got, qint64 total) {
 	DEBUG_LOG(("Update Info: part %1 of %2").arg(got).arg(total));
 
 	const auto data = _reply->readAll();
+	if (total > Loader::kMaxFileSize) {
+		_parent->setFailure(UpdateFailure::DownloadValidation);
+		_parent->threadSafeFailed();
+		return;
+	}
 	_parent->writeChunk(bytes::make_span(data), total);
 }
 
@@ -1256,345 +956,10 @@ void HttpLoaderActor::partFailed(QNetworkReply::NetworkError e) {
 	LOG(("Update Error: failed to download part after %1, error %2"
 		).arg(_parent->alreadySize()
 		).arg(e));
+	_parent->setFailure(e == QNetworkReply::TimeoutError
+		? UpdateFailure::Timeout
+		: UpdateFailure::Network);
 	_parent->threadSafeFailed();
-}
-
-MtpChecker::MtpChecker(
-	base::weak_ptr<Main::Session> session,
-	bool testing)
-: Checker(testing)
-, _mtp(session) {
-}
-
-void MtpChecker::start() {
-	if (!_mtp.valid()) {
-		LOG(("Update Info: MTP is unavailable."));
-		crl::on_main(this, [=] { fail(); });
-		return;
-	}
-	if (BuildIsCanary) {
-		startCanary();
-		return;
-	}
-	const auto updaterVersion = Platform::AutoUpdateVersion();
-	const auto feed = "tdhbcfeed"
-		+ (updaterVersion > 1 ? QString::number(updaterVersion) : QString());
-	MTP::ResolveChannel(&_mtp, feed, [=](
-			const MTPInputChannel &channel) {
-		_mtp.send(
-			MTPmessages_GetHistory(
-				MTP_inputPeerChannel(
-					channel.c_inputChannel().vchannel_id(),
-					channel.c_inputChannel().vaccess_hash()),
-				MTP_int(0),  // offset_id
-				MTP_int(0),  // offset_date
-				MTP_int(0),  // add_offset
-				MTP_int(1),  // limit
-				MTP_int(0),  // max_id
-				MTP_int(0),  // min_id
-				MTP_long(0)), // hash
-			[=](const MTPmessages_Messages &result) { gotMessage(result); },
-			failHandler());
-	}, [=] { fail(); });
-}
-
-void MtpChecker::gotMessage(const MTPmessages_Messages &result) {
-	const auto location = parseMessage(result);
-	if (!location) {
-		fail();
-		return;
-	} else if (location->username.isEmpty()) {
-		done(nullptr);
-		return;
-	}
-	const auto ready = [=](std::unique_ptr<MTP::DedicatedLoader> loader) {
-		if (loader) {
-			done(std::move(loader));
-		} else {
-			fail();
-		}
-	};
-	MTP::StartDedicatedLoader(&_mtp, *location, UpdatesFolder(), ready);
-}
-
-auto MtpChecker::parseMessage(const MTPmessages_Messages &result) const
--> std::optional<FileLocation> {
-	const auto message = MTP::GetMessagesElement(result);
-	if (!message || message->type() != mtpc_message) {
-		LOG(("Update Error: MTP feed message not found."));
-		return std::nullopt;
-	}
-	return parseText(message->c_message().vmessage().v);
-}
-
-auto MtpChecker::parseText(const QByteArray &text) const
--> std::optional<FileLocation> {
-	auto bestAvailableVersion = 0ULL;
-	auto bestLocation = FileLocation();
-	const auto accumulate = [&](
-			uint64 version,
-			bool isAlpha,
-			const QJsonObject &map) {
-		if (isAlpha) {
-			LOG(("Update Error: MTP closed alpha found."));
-			return false;
-		}
-		bestAvailableVersion = version;
-		const auto key = testing() ? "testing" : "released";
-		const auto entry = map.constFind(key);
-		if (entry == map.constEnd()) {
-			LOG(("Update Error: MTP entry not found for version %1."
-				).arg(version));
-			return false;
-		} else if (!(*entry).isString()) {
-			LOG(("Update Error: MTP entry is not a string for version %1."
-				).arg(version));
-			return false;
-		}
-		const auto full = (*entry).toString();
-		const auto start = full.indexOf(':');
-		const auto post = full.indexOf('#');
-		if (start <= 0 || post < start) {
-			LOG(("Update Error: MTP entry '%1' is bad for version %2."
-				).arg(full
-				).arg(version));
-			return false;
-		}
-		bestLocation.username = full.mid(start + 1, post - start - 1);
-		bestLocation.postId = base::StringViewMid(full, post + 1).toInt();
-		if (bestLocation.username.isEmpty() || !bestLocation.postId) {
-			LOG(("Update Error: MTP entry '%1' is bad for version %2."
-				).arg(full
-				).arg(version));
-			return false;
-		}
-		return true;
-	};
-	const auto result = ParseCommonMap(text, testing(), accumulate);
-	if (!result) {
-		return std::nullopt;
-	}
-	return validateLatestLocation(bestAvailableVersion, bestLocation);
-}
-
-auto MtpChecker::validateLatestLocation(
-		uint64 availableVersion,
-		const FileLocation &location) const -> FileLocation {
-	const auto myVersion = uint64(AppVersion);
-	return (availableVersion <= myVersion) ? FileLocation() : location;
-}
-
-void MtpChecker::startCanary() {
-	if (!CanaryMetadataMessageId) {
-		LOG(("Update Error: Canary metadata message id is not set."));
-		crl::on_main(this, [=] { fail(); });
-		return;
-	}
-	// The branches are compile-time: the private one exists only in a
-	// build that has a real channel id, so no other build compiles a
-	// channelLoaded() whose result the optimizer can fold to nullptr and
-	// then report as a null 'this' at the inputChannel() call below.
-	if constexpr (BuildUpdateChannel == Updates::Channel::CanaryPublic) {
-		const auto username = QString::fromLatin1(
-			CanaryPublicChannelUsername);
-		if (username.isEmpty()) {
-			LOG(("Update Error: Canary channel username is not set."));
-			crl::on_main(this, [=] { fail(); });
-			return;
-		}
-		MTP::ResolveChannel(&_mtp, username, [=](
-				const MTPInputChannel &channel) {
-			requestCanaryMetadata(channel, CanaryMetadataMessageId, true);
-		}, [=] { fail(); });
-	} else if constexpr (CanaryPrivateChannelId != 0) {
-		// Membership is enrollment for the private canary channel, so it
-		// is located by numeric id and cached access hash on this
-		// session, never through a username resolve.
-		const auto session = _mtp.session().get();
-		const auto channel = session
-			? session->data().channelLoaded(
-				ChannelId(BareId(CanaryPrivateChannelId)))
-			: nullptr;
-		if (!channel || !channel->amIn()) {
-			LOG(("Update Error: Canary private channel is not available."));
-			crl::on_main(this, [=] { fail(); });
-			return;
-		}
-		requestCanaryMetadata(
-			channel->inputChannel(),
-			CanaryMetadataMessageId,
-			true);
-	} else {
-		LOG(("Update Error: Canary private channel id is not set."));
-		crl::on_main(this, [=] { fail(); });
-	}
-}
-
-void MtpChecker::requestCanaryMetadata(
-		const MTPInputChannel &channel,
-		int messageId,
-		bool fallbackToPinned) {
-	_mtp.send(
-		MTPchannels_GetMessages(
-			channel,
-			MTP_vector<MTPInputMessage>(
-				1,
-				MTP_inputMessageID(MTP_int(messageId)))),
-		[=](const MTPmessages_Messages &result) {
-			gotCanaryMessage(channel, result, messageId, fallbackToPinned);
-		},
-		failHandler());
-}
-
-void MtpChecker::requestCanaryPinnedFallback(const MTPInputChannel &channel) {
-	_mtp.send(
-		MTPchannels_GetFullChannel(channel),
-		[=](const MTPmessages_ChatFull &result) {
-			const auto pinnedId = result.data().vfull_chat().match([](
-					const MTPDchannelFull &data) {
-				return data.vpinned_msg_id().value_or_empty();
-			}, [](const auto &) {
-				return 0;
-			});
-			if (!pinnedId) {
-				LOG(("Update Error: Canary pinned message not found."));
-				fail();
-				return;
-			}
-			requestCanaryMetadata(channel, pinnedId, false);
-		},
-		failHandler());
-}
-
-void MtpChecker::gotCanaryMessage(
-		const MTPInputChannel &channel,
-		const MTPmessages_Messages &result,
-		int messageId,
-		bool fallbackToPinned) {
-	const auto message = MTP::GetMessagesElement(result, messageId);
-	if (!message || message->type() != mtpc_message) {
-		if (fallbackToPinned) {
-			requestCanaryPinnedFallback(channel);
-		} else {
-			LOG(("Update Error: Canary metadata message not found."));
-			fail();
-		}
-		return;
-	}
-	parseCanaryMetadata(channel, message->c_message().vmessage().v);
-}
-
-void MtpChecker::parseCanaryMetadata(
-		const MTPInputChannel &channel,
-		const QByteArray &text) {
-	auto parseError = QJsonParseError();
-	const auto document = QJsonDocument::fromJson(text, &parseError);
-	if (parseError.error != QJsonParseError::NoError
-		|| !document.isObject()) {
-		LOG(("Update Error: Could not parse canary metadata JSON."));
-		fail();
-		return;
-	}
-	const auto object = document.object();
-	if (object.value(u"format"_q).toDouble() != 1.) {
-		LOG(("Update Error: Unknown canary metadata format."));
-		fail();
-		return;
-	}
-
-	const auto decode = [](const QJsonValue &value) {
-		if (!value.isString()) {
-			return QByteArray();
-		}
-		const auto decoded = QByteArray::fromBase64Encoding(
-			value.toString().toLatin1(),
-			QByteArray::AbortOnBase64DecodingErrors);
-		return decoded ? decoded.decoded : QByteArray();
-	};
-	const auto manifest = decode(object.value(u"manifest"_q));
-	const auto manifestSig = decode(object.value(u"manifest_sig"_q));
-	if (!manifest.isEmpty() && !manifestSig.isEmpty()) {
-		auto error = QString();
-		if (auto parsed = Updates::ParseVerifiedManifest(
-				manifest,
-				manifestSig,
-				Updates::RootPublicKeyPem(),
-				&error)) {
-			AdoptManifest(*parsed);
-		} else {
-			LOG(("Update Error: Bad canary metadata manifest: %1").arg(error));
-		}
-	}
-
-	const auto channels = object.value(u"channels"_q).toObject();
-	const auto platform = Platform::AutoUpdateKey();
-	auto bestVersion = quint64(0);
-	auto bestPostId = 0;
-	const auto readU32 = [](const QJsonValue &value, quint32 *result) {
-		const auto number = value.toDouble();
-		if (!(number >= 0.) || !(number <= 4294967295.)) {
-			return false;
-		}
-		*result = quint32(number);
-		return (double(*result) == number);
-	};
-	const auto consider = [&](const QByteArray &name) {
-		const auto entry = channels.value(QLatin1String(name)).toObject();
-		if (entry.isEmpty()) {
-			return;
-		}
-		auto base = quint32(0);
-		auto counter = quint32(0);
-		auto postId = quint32(0);
-		if (!readU32(entry.value(u"base"_q), &base)
-			|| !base
-			|| !readU32(entry.value(u"counter"_q), &counter)
-			|| !readU32(
-				entry.value(u"posts"_q).toObject().value(platform),
-				&postId)
-			|| !postId
-			|| postId > quint32(0x7FFFFFFF)) {
-			return;
-		}
-		const auto version = Updates::MakeUpdateVersion(base, counter);
-		if (version > bestVersion) {
-			bestVersion = version;
-			bestPostId = int(postId);
-		}
-	};
-	consider(Updates::ChannelName(BuildUpdateChannel));
-	if (BuildUpdateChannel == Updates::Channel::CanaryPublic) {
-		// Dormancy rescue: a stale public canary channel may point to a
-		// newer stable or beta release. Package verification still
-		// enforces the strictly-greater-base channel policy on whatever
-		// is downloaded.
-		consider(Updates::ChannelName(Updates::Channel::Stable));
-		consider(Updates::ChannelName(Updates::Channel::Beta));
-	}
-	if (!bestVersion || bestVersion <= RunningUpdateVersion()) {
-		done(nullptr);
-		return;
-	}
-	auto location = FileLocation();
-	location.channelId = uint64(channel.c_inputChannel().vchannel_id().v);
-	location.accessHash = uint64(channel.c_inputChannel().vaccess_hash().v);
-	location.postId = bestPostId;
-	const auto ready = [=](std::unique_ptr<MTP::DedicatedLoader> loader) {
-		if (loader) {
-			done(std::move(loader));
-		} else {
-			fail();
-		}
-	};
-	MTP::StartDedicatedLoader(&_mtp, location, UpdatesFolder(), ready);
-}
-
-Fn<void(const MTP::Error &error)> MtpChecker::failHandler() {
-	return [=](const MTP::Error &error) {
-		LOG(("Update Error: MTP check failed with '%1'"
-			).arg(QString::number(error.code()) + ':' + error.type()));
-		fail();
-	};
 }
 
 #if !defined Q_OS_WIN && !defined Q_OS_MAC
@@ -1627,7 +992,7 @@ FlatpakChecker::FlatpakChecker(bool testing)
 				Gio::DBusErrorNS_::strip_remote_error(result.error());
 				LOG(("Update Error: %1").arg(
 					result.error().message_().c_str()));
-				fail();
+				fail(UpdateFailure::Network);
 				return;
 			}
 
@@ -1645,7 +1010,7 @@ FlatpakChecker::FlatpakChecker(bool testing)
 					Gio::DBusErrorNS_::strip_remote_error(result.error());
 					LOG(("Update Error: %1").arg(
 						result.error().message_().c_str()));
-					fail();
+					fail(UpdateFailure::Network);
 					return;
 				}
 
@@ -1772,6 +1137,7 @@ public:
 	rpl::producer<> isLatest() const;
 	rpl::producer<Progress> progress() const;
 	rpl::producer<> failed() const;
+	UpdateFailure failureReason() const;
 	rpl::producer<> ready() const;
 
 	void start(bool forceWait);
@@ -1804,10 +1170,13 @@ private:
 	void checkerDone(
 		not_null<Implementation*> which,
 		std::shared_ptr<Loader> loader);
-	void checkerFail(not_null<Implementation*> which);
+	void checkerFail(
+		not_null<Implementation*> which,
+		UpdateFailure failure);
+	void fail(UpdateFailure reason);
 
 	void finalize(QString filepath);
-	void unpackDone(bool ready);
+	void unpackDone(bool ready, UpdateFailure failure);
 	void handleChecking();
 	void handleProgress();
 	void handleLatest();
@@ -1832,6 +1201,7 @@ private:
 	base::weak_ptr<Main::Session> _session;
 
 	rpl::lifetime _lifetime;
+	std::atomic<UpdateFailure> _failure = UpdateFailure::None;
 
 };
 
@@ -1872,6 +1242,10 @@ rpl::producer<> Updater::failed() const {
 	return _failed.events();
 }
 
+UpdateFailure Updater::failureReason() const {
+	return _failure.load(std::memory_order_relaxed);
+}
+
 rpl::producer<> Updater::ready() const {
 	return _ready.events();
 }
@@ -1881,6 +1255,7 @@ void Updater::check() {
 }
 
 void Updater::handleReady() {
+	_failure.store(UpdateFailure::None, std::memory_order_relaxed);
 	stop();
 	_action = Action::Ready;
 	if (!Quitting()) {
@@ -1894,6 +1269,7 @@ void Updater::handleFailed() {
 }
 
 void Updater::handleLatest() {
+	_failure.store(UpdateFailure::None, std::memory_order_relaxed);
 	if (const auto update = FindUpdateFile(); !update.isEmpty()) {
 		QFile(update).remove();
 	}
@@ -1901,12 +1277,18 @@ void Updater::handleLatest() {
 }
 
 void Updater::handleChecking() {
+	_failure.store(UpdateFailure::None, std::memory_order_relaxed);
 	_action = Action::Checking;
 	_retryTimer.callOnce(kUpdaterTimeout);
 }
 
 void Updater::handleProgress() {
 	_retryTimer.callOnce(kUpdaterTimeout);
+}
+
+void Updater::fail(UpdateFailure reason) {
+	_failure.store(reason, std::memory_order_relaxed);
+	_failed.fire({});
 }
 
 void Updater::scheduleNext() {
@@ -1987,22 +1369,10 @@ void Updater::start(bool forceWait) {
 		}
 #endif // !Q_OS_WIN && !Q_OS_MAC
 	} else if (sendRequest) {
-		if (BuildIsCanary) {
-			// Canary builds discover updates only through their own MTP
-			// channels, the v1 HTTP feed serves other channels.
-			startImplementation(&_httpImplementation, nullptr);
-		} else {
-			startImplementation(
-				&_httpImplementation,
-				std::make_unique<HttpChecker>(_testing));
-		}
-		startImplementation(
-			&_mtpImplementation,
-			std::make_unique<MtpChecker>(
-				LookupCanaryPrivateSession(_session),
-				_testing));
-
 		_checking.fire({});
+        startImplementation(&_httpImplementation, std::make_unique<HttpChecker>(_testing));
+        _mtpImplementation = Implementation{};
+        _mtpImplementation.failed = true;
 	} else {
 		_timer.callOnce((updateInSecs + 5) * crl::time(1000));
 	}
@@ -2018,7 +1388,7 @@ void Updater::startImplementation(
 			}
 
 			void start() override {
-				crl::on_main(this, [=] { fail(); });
+				crl::on_main(this, [=] { fail(UpdateFailure::Network); });
 			}
 
 		};
@@ -2030,8 +1400,8 @@ void Updater::startImplementation(
 		checkerDone(which, std::move(loader));
 	}, checker->lifetime());
 	checker->failed(
-	) | rpl::on_next([=] {
-		checkerFail(which);
+	) | rpl::on_next([=](UpdateFailure failure) {
+		checkerFail(which, failure);
 	}, checker->lifetime());
 
 	*which = Implementation{ std::move(checker) };
@@ -2050,9 +1420,12 @@ void Updater::checkerDone(
 	tryLoaders();
 }
 
-void Updater::checkerFail(not_null<Implementation*> which) {
+void Updater::checkerFail(
+		not_null<Implementation*> which,
+		UpdateFailure failure) {
 	which->checker = nullptr;
 	which->failed = true;
+	which->failure = failure;
 
 	tryLoaders();
 }
@@ -2072,6 +1445,7 @@ void Updater::handleTimeout() {
 		const auto reset = [&](Implementation &which) {
 			if (base::take(which.checker)) {
 				which.failed = true;
+				which.failure = UpdateFailure::Timeout;
 			}
 		};
 		reset(_httpImplementation);
@@ -2081,7 +1455,10 @@ void Updater::handleTimeout() {
 			_timer.callOnce(kUpdaterTimeout);
 		}
 	} else if (_action == Action::Loading) {
-		_failed.fire({});
+		const auto loader = std::dynamic_pointer_cast<HttpLoader>(_activeLoader);
+		fail(loader && loader->failure() == UpdateFailure::DownloadValidation
+			? UpdateFailure::DownloadValidation
+			: UpdateFailure::Timeout);
 	}
 }
 
@@ -2105,7 +1482,8 @@ bool Updater::tryLoaders() {
 			}, loader->lifetime());
 			loader->failed(
 			) | rpl::on_next([=] {
-				_failed.fire({});
+				const auto http = std::dynamic_pointer_cast<HttpLoader>(_activeLoader);
+				fail(http ? http->failure() : UpdateFailure::Download);
 			}, loader->lifetime());
 
 			_retryTimer.callOnce(kUpdaterTimeout);
@@ -2117,13 +1495,13 @@ bool Updater::tryLoaders() {
 	};
 	if (KSandbox::isFlatpak()) {
 		if (_flatpakImplementation.failed) {
-			_failed.fire({});
+			fail(_flatpakImplementation.failure);
 			return false;
 		} else {
 			tryOne(_flatpakImplementation);
 		}
 	} else if (_mtpImplementation.failed && _httpImplementation.failed) {
-		_failed.fire({});
+		fail(_httpImplementation.failure);
 		return false;
 	} else if (!_mtpImplementation.loader) {
 		tryOne(_httpImplementation);
@@ -2143,22 +1521,24 @@ void Updater::finalize(QString filepath) {
 		return;
 	}
 	_retryTimer.cancel();
+    const auto candidate = static_cast<HttpLoader*>(_activeLoader.get())->candidate();
 	_activeLoader = nullptr;
 	_action = Action::Unpacking;
 	crl::async([=] {
-		const auto ready = UnpackUpdate(filepath);
+		auto failure = UpdateFailure::DownloadValidation;
+		const auto ready = UnpackUpdate(filepath, candidate, &failure);
 		crl::on_main([=] {
-			GetUpdaterInstance()->unpackDone(ready);
+			GetUpdaterInstance()->unpackDone(ready, failure);
 		});
 	});
 }
 
-void Updater::unpackDone(bool ready) {
+void Updater::unpackDone(bool ready, UpdateFailure failure) {
 	if (ready) {
 		_ready.fire({});
 	} else {
 		ClearAll();
-		_failed.fire({});
+		fail(failure);
 	}
 }
 
@@ -2229,6 +1609,10 @@ bool UpdateChecker::percent() const {
 	return _updater->percent();
 }
 
+UpdateFailure UpdateChecker::failureReason() const {
+	return _updater->failureReason();
+}
+
 //QString winapiErrorWrap() {
 //	WCHAR errMsg[2048];
 //	DWORD errorCode = GetLastError();
@@ -2254,7 +1638,7 @@ bool checkReadyUpdate() {
 	}
 
 	// check ready version
-	QString versionPath = readyPath + u"/tdata/version"_q;
+	const auto versionPath = readyFilePath;
 	{
 		QFile fVersion(versionPath);
 		if (!fVersion.open(QIODevice::ReadOnly)) {
@@ -2268,39 +1652,16 @@ bool checkReadyUpdate() {
 			ClearAll();
 			return false;
 		}
-		if (versionNum == 0x7FFFFFFF) { // alpha version
-			quint64 alphaVersion = 0;
-			if (fVersion.read((char*)&alphaVersion, sizeof(quint64)) != sizeof(quint64)) {
-				LOG(("Update Error: cant read alpha version from file '%1'").arg(versionPath));
-				ClearAll();
-				return false;
-			}
-			if (!cAlphaVersion() || alphaVersion <= cAlphaVersion()) {
-				LOG(("Update Error: cant install alpha version %1 having alpha version %2").arg(alphaVersion).arg(cAlphaVersion()));
-				ClearAll();
-				return false;
-			}
-		} else if (versionNum == kVersionFileCanaryMarker) {
-			quint64 canaryVersion = 0;
-			if (fVersion.read((char*)&canaryVersion, sizeof(quint64)) != sizeof(quint64)) {
-				LOG(("Update Error: cant read canary version from file '%1'").arg(versionPath));
-				ClearAll();
-				return false;
-			}
-			if (!BuildIsCanary || canaryVersion <= RunningUpdateVersion()) {
-				LOG(("Update Error: cant install canary version %1 having version %2").arg(canaryVersion).arg(RunningUpdateVersion()));
-				ClearAll();
-				return false;
-			}
-		} else if (BuildUpdateChannel == Updates::Channel::CanaryPrivate) {
-			LOG(("Update Error: cant install a non-canary version %1 on a private canary").arg(versionNum));
-			ClearAll();
-			return false;
-		} else if (versionNum <= AppVersion) {
-			LOG(("Update Error: cant install version %1 having version %2").arg(versionNum).arg(AppVersion));
-			ClearAll();
-			return false;
-		}
+        quint64 fullVersion = 0;
+        VersionInt channelValue = 0;
+        if (versionNum != kVersionFileFishGramMarker
+            || fVersion.read(reinterpret_cast<char*>(&fullVersion), sizeof(fullVersion)) != sizeof(fullVersion)
+            || fVersion.read(reinterpret_cast<char*>(&channelValue), sizeof(channelValue)) != sizeof(channelValue)
+            || !fVersion.atEnd() || channelValue > 1 || fullVersion <= RunningUpdateVersion()
+            || !Updates::ChannelPolicyAllows(BuildUpdateChannel, cInstallBetaVersion(), Updates::Channel(channelValue), fullVersion, RunningUpdateVersion())) {
+            ClearAll();
+            return false;
+        }
 		fVersion.close();
 	}
 
@@ -2326,20 +1687,9 @@ bool checkReadyUpdate() {
 		}
 	}
 #ifdef Q_OS_WIN
-	if (CopyFile(updater.absoluteFilePath().toStdWString().c_str(), curUpdater.toStdWString().c_str(), FALSE) == FALSE) {
-		DWORD errorCode = GetLastError();
-		if (errorCode == ERROR_ACCESS_DENIED) { // we are in write-protected dir, like Program Files
-			cSetWriteProtected(true);
-			return true;
-		} else {
-			ClearAll();
-			return false;
-		}
-	}
-	if (DeleteFile(updater.absoluteFilePath().toStdWString().c_str()) == FALSE) {
-		ClearAll();
-		return false;
-	}
+    // Only check payload presence here. The launcher runs a copy of the
+    // installed Updater, which re-verifies the retained package before writing.
+    if (!updater.isFile() || updater.isSymLink()) return false;
 #elif defined Q_OS_MAC // Q_OS_WIN
 	QDir().mkpath(QFileInfo(curUpdater).absolutePath());
 	DEBUG_LOG(("Update Info: moving %1 to %2...").arg(updater.absoluteFilePath()).arg(curUpdater));
@@ -2426,53 +1776,8 @@ void UpdateApplication() {
 	}
 }
 
-QString countAlphaVersionSignature(uint64 version) { // duplicated in packer.cpp
-	if (cAlphaPrivateKey().isEmpty()) {
-		LOG(("Error: Trying to count alpha version signature without alpha private key!"));
-		return QString();
-	}
-
-	QByteArray signedData = (qstr("TelegramBeta_") + QString::number(version, 16).toLower()).toUtf8();
-
-	static const int32 shaSize = 20, keySize = 128;
-
-	uchar sha1Buffer[shaSize];
-	hashSha1(signedData.constData(), signedData.size(), sha1Buffer); // count sha1
-
-	uint32 siglen = 0;
-
-	RSA *prKey = [] {
-		const auto bio = MakeBIO(
-			const_cast<char*>(cAlphaPrivateKey().constData()),
-			-1);
-		return PEM_read_bio_RSAPrivateKey(bio.get(), 0, 0, 0);
-	}();
-	if (!prKey) {
-		LOG(("Error: Could not read alpha private key!"));
-		return QString();
-	}
-	if (RSA_size(prKey) != keySize) {
-		LOG(("Error: Bad alpha private key size: %1").arg(RSA_size(prKey)));
-		RSA_free(prKey);
-		return QString();
-	}
-	QByteArray signature;
-	signature.resize(keySize);
-	if (RSA_sign(NID_sha1, (const uchar*)(sha1Buffer), shaSize, (uchar*)(signature.data()), &siglen, prKey) != 1) { // count signature
-		LOG(("Error: Counting alpha version signature failed!"));
-		RSA_free(prKey);
-		return QString();
-	}
-	RSA_free(prKey);
-
-	if (siglen != keySize) {
-		LOG(("Error: Bad alpha version signature length: %1").arg(siglen));
-		return QString();
-	}
-
-	signature = signature.toBase64(QByteArray::Base64UrlEncoding | QByteArray::OmitTrailingEquals);
-	signature = signature.replace('-', '8').replace('_', 'B');
-	return QString::fromUtf8(signature.mid(19, 32));
+QString countAlphaVersionSignature(uint64) {
+	return {};
 }
 
 } // namespace Core

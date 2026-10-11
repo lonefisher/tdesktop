@@ -1,0 +1,4 @@
+// Windows displays the complete FishGram version as text. Update ordering uses
+// the signed 64-bit base/revision value, not Windows' 16-bit resource components.
+#define FISHGRAM_RESOURCE_NUMERIC @fishgram_resource_numeric@,0
+#define FISHGRAM_RESOURCE_TEXT "@desktop_app_version_string@-r@FISHGRAM_REVISION@"

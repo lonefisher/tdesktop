@@ -37,6 +37,8 @@ namespace Core {
 inline constexpr auto BuildUpdateChannel = Updates::Channel(
 	TDESKTOP_UPDATE_CHANNEL);
 inline constexpr auto CanaryBuildCounter = quint32(TDESKTOP_CANARY_COUNTER);
+inline constexpr auto FishGramRevision = quint32(FISHGRAM_REVISION);
+static_assert(FishGramRevision > 0);
 inline constexpr auto BuildIsCanary
 	= (BuildUpdateChannel == Updates::Channel::CanaryPublic)
 	|| (BuildUpdateChannel == Updates::Channel::CanaryPrivate);
@@ -68,7 +70,7 @@ inline constexpr auto CanaryMetadataMessageId
 [[nodiscard]] inline constexpr quint64 RunningUpdateVersion() {
 	return Updates::MakeUpdateVersion(
 		quint32(AppVersion),
-		CanaryBuildCounter);
+		FishGramRevision);
 }
 
 [[nodiscard]] inline QString CanaryVersionSuffix() {

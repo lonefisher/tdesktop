@@ -8,12 +8,12 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #pragma once
 
 #include "base/platform/win/base_windows_rpcndr_h.h"
+#include "platform/win/windows_app_user_model_identity.h"
 #include "windows_toastactivator_h.h"
 
 #include "base/platform/win/wrl/wrl_implements_h.h"
 
-// {F11932D3-6110-4BBC-9B02-B2EC07A1BD19}
-class DECLSPEC_UUID("F11932D3-6110-4BBC-9B02-B2EC07A1BD19") ToastActivator
+class DECLSPEC_UUID(FISHGRAM_TOAST_ACTIVATOR_UUID) ToastActivator
 	: public ::Microsoft::WRL::RuntimeClass<
 		::Microsoft::WRL::RuntimeClassFlags<::Microsoft::WRL::ClassicCom>,
 		INotificationActivationCallback,
