@@ -25,9 +25,7 @@ StartWidget::StartWidget(
 : Step(parent, account, data, true) {
 	setMouseTracking(true);
 	setTitleText(rpl::single(u"FishGram"_q));
-	setDescriptionText(rpl::single(
-		u"FishGram is an unofficial Telegram client.\n"
-		"Built using the Telegram API."_q));
+	setDescriptionText(tr::lng_fishgram_intro_about());
 	show();
 }
 
