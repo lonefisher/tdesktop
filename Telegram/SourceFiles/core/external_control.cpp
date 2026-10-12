@@ -120,7 +120,7 @@ void RequestEnableAutomation() {
 		FillAutomationConfirmBox(
 			box,
 			u"An external program is trying to control "
-			u"Telegram Desktop over the local socket — read open "
+			u"FishGram over the local socket — read open "
 			u"windows and activate them, change the proxy, the theme "
 			u"and lock the app.\n\nEnable local "
 			u"automation? While it is on, anything running under your "
