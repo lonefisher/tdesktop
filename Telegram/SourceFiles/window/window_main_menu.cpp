@@ -384,8 +384,8 @@ MainMenu::MainMenu(
 	parentResized();
 
 	_telegram->setMarkedText(tr::link(
-		u"Telegram Desktop"_q,
-		u"https://desktop.telegram.org"_q));
+		u"FishGram"_q,
+		u"https://github.com/lonefisher/fishgram"_q));
 	_telegram->setLinksTrusted();
 	// The canary version is too long for the "Version {version}" form.
 	_version->setMarkedText(
