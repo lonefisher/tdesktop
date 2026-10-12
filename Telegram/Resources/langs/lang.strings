@@ -6201,6 +6201,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 "lng_theme_preview_users#other" = "{count} people are using this theme";
 
 "lng_new_version_wrap" = "Telegram Desktop was updated to version {version}\n\n{changes}\n\nFull version history is available here:\n{link}";
+"lng_fishgram_new_version_wrap" = "FishGram was updated to version {version}\n\n{changes}\n\nFull version history is available here:\n{link}";
 "lng_new_version_minor" = "— Bug fixes and other minor improvements";
 
 "lng_menu_insert_unicode" = "Insert Unicode control character";
