@@ -34,6 +34,13 @@ InnerWidget::InnerWidget(
 		[this] { refreshHeight(); },
 		_empty->lifetime());
 	_list = setupList();
+	_controller->searchQueryValue(
+	) | rpl::on_next([this](const QString &query) {
+		_empty->setSearchQuery(query);
+		_empty->setStatus(QString(), [] {});
+		_empty->setLoadedCount(std::nullopt);
+		_empty->setLoading(_list->globalMediaRestrictedSearchLoading());
+	}, _list->lifetime());
 	_list->heightValue() | rpl::on_next([=] {
 		const auto loading = _list->globalMediaRestrictedSearchLoading();
 		_empty->setLoading(loading);
@@ -114,14 +121,6 @@ object_ptr<Media::ListWidget> InnerWidget::setupList() {
 	}) | rpl::start_to_stream(
 		_scrollToRequests,
 		result->lifetime());
-
-	_controller->searchQueryValue(
-	) | rpl::on_next([this](const QString &query) {
-		_empty->setSearchQuery(query);
-		_empty->setStatus(QString(), [] {});
-		_empty->setLoadedCount(std::nullopt);
-		_empty->setLoading(_list->globalMediaRestrictedSearchLoading());
-	}, result->lifetime());
 
 	return result;
 }
