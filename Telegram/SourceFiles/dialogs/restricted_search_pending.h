@@ -11,6 +11,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 namespace Dialogs {
 
+enum class RestrictedSearchEmptyState { Complete, Pending, Incomplete };
+
 // Tracks the merged-page lifecycle independently from native search requests.
 class RestrictedSearchPending final {
 public:
@@ -34,6 +36,14 @@ public:
 
 	[[nodiscard]] bool pending() const {
 		return _pending;
+	}
+
+	[[nodiscard]] RestrictedSearchEmptyState emptyState(bool incomplete) const {
+		return _pending
+			? RestrictedSearchEmptyState::Pending
+			: incomplete
+				? RestrictedSearchEmptyState::Incomplete
+				: RestrictedSearchEmptyState::Complete;
 	}
 
 private:

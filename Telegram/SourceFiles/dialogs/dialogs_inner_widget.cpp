@@ -170,8 +170,12 @@ constexpr auto kPreviewPostsLimit = 3;
 [[nodiscard]] object_ptr<SearchEmpty> MakeSearchEmpty(
 		QWidget *parent,
 		SearchState state,
-		bool loading,
+		RestrictedSearchEmptyState emptyState,
+		QString incompleteStatus,
+		Fn<void()> retrySearch,
 		Fn<void()> resetSearchFilters) {
+	const auto loading = (emptyState == RestrictedSearchEmptyState::Pending);
+	const auto incomplete = (emptyState == RestrictedSearchEmptyState::Incomplete);
 	const auto query = state.query.trimmed();
 	const auto hashtag = !query.isEmpty() && (query[0] == '#');
 	const auto trimmed = hashtag ? query.mid(1).trimmed() : query;
@@ -190,12 +194,15 @@ constexpr auto kPreviewPostsLimit = 3;
 	const auto suggestAllChats = !waiting
 		&& state.tab == ChatSearchTab::MyMessages
 		&& (state.filter != ChatTypeFilter::All || !state.fromArchive);
-	const auto icon = waiting || loading
+	const auto icon = waiting || loading || incomplete
 		? SearchEmptyIcon::Search
 		: SearchEmptyIcon::NoResults;
 	auto text = TextWithEntities();
 	if (loading) {
 		text.append(tr::lng_contacts_loading(tr::now));
+	} else if (incomplete) {
+		text.append(incompleteStatus).append("\n\n").append(
+			tr::link(tr::lng_settings_restricted_search_retry(tr::now)));
 	} else if (waiting) {
 		if (hashtag) {
 			text.append(tr::lng_search_tab_by_hashtag(tr::now));
@@ -228,7 +235,10 @@ constexpr auto kPreviewPostsLimit = 3;
 		parent,
 		icon,
 		rpl::single(std::move(text)));
-	if (suggestAllChats) {
+	if (incomplete) {
+		result->handlerActivated(
+		) | rpl::on_next(retrySearch, result->lifetime());
+	} else if (suggestAllChats && !loading) {
 		result->handlerActivated(
 		) | rpl::on_next(resetSearchFilters, result->lifetime());
 	}
@@ -5022,6 +5032,9 @@ void InnerWidget::refreshEmpty() {
 			&& _peerSearchResults.empty()
 			&& _hashtagResults.empty();
 		const auto pending = _restrictedSearchPending.pending();
+		const auto incompleteStatus = _restrictedSearchActive
+			? _restrictedSearchStatus
+			: QString();
 		const auto nativeLoading = _searchLoading || _searchWaiting;
 		if (!empty) {
 			if (_searchEmpty) {
@@ -5032,12 +5045,18 @@ void InnerWidget::refreshEmpty() {
 				_searchEmpty->hide();
 			}
 		} else if (_searchEmptyState != _searchState
-			|| _searchEmptyLoadingState != pending) {
+			|| _searchEmptyLoadingState != pending
+			|| _searchEmptyRestrictedStatus != incompleteStatus) {
 			_searchEmptyState = _searchState;
 			_searchEmptyLoadingState = pending;
-			_searchEmpty = MakeSearchEmpty(this, _searchState, pending, [=] {
-				_resetSearchRestrictionsRequests.fire({});
-			});
+			_searchEmptyRestrictedStatus = incompleteStatus;
+			_searchEmpty = MakeSearchEmpty(
+				this,
+				_searchState,
+				_restrictedSearchPending.emptyState(!incompleteStatus.isEmpty()),
+				incompleteStatus,
+				[=] { _restrictedSearchRetryRequests.fire({}); },
+				[=] { _resetSearchRestrictionsRequests.fire({}); });
 			if (_controller->session().data().chatsListLoaded()) {
 				_searchEmpty->animate();
 			}

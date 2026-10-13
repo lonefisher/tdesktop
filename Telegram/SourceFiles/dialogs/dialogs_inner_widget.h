@@ -774,6 +774,7 @@ private:
 	object_ptr<SearchEmpty> _searchEmpty = { nullptr };
 	SearchState _searchEmptyState;
 	bool _searchEmptyLoadingState = false;
+	QString _searchEmptyRestrictedStatus;
 	object_ptr<Ui::FlatLabel> _empty = { nullptr };
 	object_ptr<Ui::VerticalLayout> _emptyList = { nullptr };
 	object_ptr<Ui::RoundButton> _emptyButton = { nullptr };
