@@ -121,10 +121,6 @@ Provider::Provider(not_null<AbstractController*> controller)
 , _type(_controller->section().mediaType())
 , _onlyForwardable(_controller->key().globalMediaOnlyForwardable())
 , _slice(sliceKey(_aroundId)) {
-	_session->settings().restrictedGlobalSearchEnabledValue(
-	) | rpl::skip(1) | rpl::on_next([=] {
-		restart();
-	}, _lifetime);
 	_controller->session().data().itemRemoved(
 	) | rpl::on_next([this](auto item) {
 		itemRemoved(item);
@@ -218,12 +214,17 @@ void Provider::restart() {
 	}
 	auto waiters = std::vector<Fn<void()>>();
 	for (auto &entry : _totalLists) {
+		if (entry.second.requestId) {
+			_session->api().request(base::take(entry.second.requestId)).cancel();
+		}
 		auto pending = base::take(entry.second.requestWaiters);
 		waiters.insert(
 			waiters.end(),
 			std::make_move_iterator(begin(pending)),
 			std::make_move_iterator(end(pending)));
 	}
+	_totalLists.clear();
+	_seenIds.clear();
 	for (auto &callback : waiters) {
 		callback();
 	}
@@ -420,6 +421,9 @@ void Provider::requestMore(
 	list->requestCursors.push_back(cursor);
 	const auto token = ++list->requestToken;
 	const auto done = [=](const Api::GlobalMediaResult &result) {
+		if (_generation != generation) {
+			return;
+		}
 		const auto list = listForQuery(query);
 		if (list->requestToken != token) {
 			return;
