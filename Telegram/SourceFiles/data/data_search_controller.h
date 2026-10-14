@@ -44,6 +44,7 @@ struct GlobalMediaResult {
 	int32 offsetRate = 0;
 	int fullCount = 0;
 	int filteredCount = 0;
+	bool failed = false;
 };
 
 [[nodiscard]] MTPMessagesFilter PrepareSearchFilter(

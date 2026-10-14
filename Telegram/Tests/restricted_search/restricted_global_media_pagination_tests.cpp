@@ -7,6 +7,7 @@
 #include <iostream>
 #include <map>
 #include <optional>
+#include <utility>
 #include <vector>
 
 using namespace Info::GlobalMedia::Pagination;
@@ -26,6 +27,74 @@ struct QueryList {
 	std::vector<int> requestCursors;
 	bool loaded = false;
 };
+
+void CheckFailedQueryPage() {
+	using Info::GlobalMedia::CompleteQueryRequest;
+	using Info::GlobalMedia::RestartQueryCaches;
+	auto lists = std::map<int, QueryList>();
+	auto &first = lists[1];
+	first.requestId = 17;
+	first.requestCursors = { 0 };
+	auto notifications = 0;
+	first.requestWaiters.push_back([&] { ++notifications; });
+	// RPC failure used to look identical to an exhausted empty page.
+	assert(!CompleteQueryRequest(first, true, true));
+	assert(!first.loaded && first.requestId == 0);
+	assert(first.requestToken == 1); // stale completions no longer match
+	assert(first.requestCursors.empty());
+	assert(first.requestWaiters.empty() && notifications == 0);
+	// A -> B -> A must retain a retryable first page, not a loaded empty list.
+	const auto cancel = [](int) { assert(false); };
+	assert(RestartQueryCaches(lists, false, cancel).empty());
+	assert(lists.size() == 1 && !lists.at(1).loaded);
+	// Successful pages remain cached when a later page fails. Only the
+	// failed page's cursor is rolled back, leaving the loop guard intact.
+	auto &partial = lists[2];
+	partial.list = { 9, 8 };
+	partial.ids = { 9, 8 };
+	partial.offsetPosition = 8;
+	partial.offsetRate = 42;
+	partial.fullCount = 6;
+	partial.filteredCount = 1;
+	partial.requestId = 18;
+	partial.requestCursors = { 0, 8 };
+	partial.requestWaiters.push_back([&] { ++notifications; });
+	assert(!CompleteQueryRequest(partial, true, true));
+	assert(!partial.loaded && partial.requestId == 0);
+	assert(partial.requestToken == 1);
+	assert((partial.requestCursors == std::vector<int>{ 0 }));
+	assert(partial.requestWaiters.empty() && notifications == 0);
+	assert(RestartQueryCaches(lists, false, cancel).empty());
+	assert((partial.list == std::vector<int>{ 9, 8 }));
+	assert((partial.ids == std::vector<int>{ 9, 8 }));
+	assert(partial.offsetPosition == 8 && partial.offsetRate == 42);
+	assert(partial.fullCount == 6 && partial.filteredCount == 1);
+	// Retrying that same cursor can now complete; a genuine exhausted page
+	// stays loaded and keeps its cursor and successful items on restart.
+	partial.requestId = 19;
+	partial.requestCursors.push_back(8);
+	partial.requestWaiters.push_back([&] { ++notifications; });
+	assert(CompleteQueryRequest(partial, false, true));
+	assert(partial.loaded && partial.requestId == 0);
+	assert(partial.requestWaiters.size() == 1 && notifications == 0);
+	assert((partial.requestCursors == std::vector<int>{ 0, 8 }));
+	// Provider drains the successful page's waiters after merging its data.
+	auto completed = std::exchange(partial.requestWaiters, {});
+	completed.front()();
+	assert(notifications == 1);
+	assert(RestartQueryCaches(lists, false, cancel).empty());
+	assert(partial.loaded && partial.list.size() == 2);
+	auto empty = QueryList{};
+	empty.requestCursors = { 0 };
+	assert(CompleteQueryRequest(empty, false, true));
+	assert(empty.loaded && empty.list.empty());
+	auto more = QueryList{};
+	more.requestId = 20;
+	more.requestCursors = { 0 };
+	assert(CompleteQueryRequest(more, false, false));
+	assert(!more.loaded && more.requestId == 0);
+	assert((more.requestCursors == std::vector<int>{ 0 }));
+}
 
 void CheckQueryCacheRestart() {
 	using Info::GlobalMedia::RestartQueryCaches;
@@ -126,6 +195,7 @@ struct MockPaginator {
 } // namespace
 
 int main() {
+	CheckFailedQueryPage();
 	CheckQueryCacheRestart();
 	// The first 100 items cover the viewport; neither top-edge checks nor
 	// repeated layout checks should eagerly consume the remaining pages.

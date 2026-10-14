@@ -427,11 +427,13 @@ void Provider::requestMore(
 		if (list->requestToken != token) {
 			return;
 		}
-		list->requestId = 0;
-
-		if (!result.offsetPosition) {
-			list->loaded = true;
-		} else {
+		if (!CompleteQueryRequest(
+				*list,
+				result.failed,
+				!result.offsetPosition || !result.offsetRate)) {
+			return;
+		}
+		if (result.offsetPosition) {
 			list->filteredCount += result.filteredCount;
 			list->list.reserve(
 				list->list.size() + result.messageIds.size());
@@ -446,7 +448,6 @@ void Provider::requestMore(
 			ranges::sort(list->list, std::greater<>());
 			list->offsetPosition = result.offsetPosition;
 			list->offsetRate = result.offsetRate;
-			list->loaded = !result.offsetRate;
 		}
 		list->fullCount = list->loaded
 			? int(list->list.size())

@@ -12,6 +12,27 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 namespace Info::GlobalMedia {
 
+template <typename List>
+[[nodiscard]] bool CompleteQueryRequest(
+		List &list,
+		bool failed,
+		bool exhausted) {
+	list.requestId = 0;
+	if (failed) {
+		++list.requestToken;
+		if (!list.requestCursors.empty()) {
+			list.requestCursors.pop_back();
+		}
+		list.loaded = false;
+		// These callbacks push the slice and request more recursively. Drop
+		// them on failure: the next viewer request retries the same cursor.
+		list.requestWaiters.clear();
+		return false;
+	}
+	list.loaded = exhausted;
+	return true;
+}
+
 template <typename Lists, typename CancelRequest>
 [[nodiscard]] auto RestartQueryCaches(
 		Lists &lists,
