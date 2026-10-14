@@ -1,13 +1,98 @@
+#include "info/global_media/global_media_query_cache.h"
 #include "info/global_media/restricted_global_media_pagination.h"
 
 #include <cassert>
+#include <cstdint>
+#include <functional>
 #include <iostream>
+#include <map>
 #include <optional>
 #include <vector>
 
 using namespace Info::GlobalMedia::Pagination;
 
 namespace {
+
+struct QueryList {
+	std::vector<int> list;
+	std::vector<int> ids;
+	int offsetPosition = 0;
+	int offsetRate = 0;
+	int fullCount = 0;
+	int filteredCount = 0;
+	int requestId = 0;
+	std::uint64_t requestToken = 0;
+	std::vector<std::function<void()>> requestWaiters;
+	std::vector<int> requestCursors;
+	bool loaded = false;
+};
+
+void CheckQueryCacheRestart() {
+	using Info::GlobalMedia::RestartQueryCaches;
+	auto lists = std::map<int, QueryList>();
+	lists.emplace(1, QueryList{
+		.list = { 9, 8 },
+		.ids = { 9, 8 },
+		.offsetPosition = 8,
+		.offsetRate = 42,
+		.fullCount = 6,
+		.filteredCount = 1,
+		.requestId = 17,
+		.requestToken = 3,
+		.requestCursors = { 0, 8 },
+	});
+	lists.emplace(2, QueryList{
+		.list = { 7 },
+		.ids = { 7 },
+		.fullCount = 1,
+		.requestCursors = { 0 },
+		.loaded = true,
+	});
+	auto notified = 0;
+	lists.at(1).requestWaiters.push_back([&] { ++notified; });
+	lists.at(2).requestWaiters.push_back([&] { ++notified; });
+	auto cancelled = std::vector<int>();
+	const auto cancel = [&](int id) { cancelled.push_back(id); };
+	const auto oldToken = lists.at(1).requestToken;
+	auto waiters = RestartQueryCaches(lists, false, cancel);
+	assert((cancelled == std::vector<int>{ 17 }));
+	assert(notified == 0); // callbacks run only after restart state is reset
+	assert(waiters.size() == 2);
+	assert(lists.size() == 2); // ordinary query A -> B -> A retains both
+	const auto &partial = lists.at(1);
+	assert((partial.list == std::vector<int>{ 9, 8 }));
+	assert((partial.ids == std::vector<int>{ 9, 8 }));
+	assert(partial.offsetPosition == 8 && partial.offsetRate == 42);
+	assert(partial.fullCount == 6 && partial.filteredCount == 1);
+	assert(!partial.loaded && partial.requestId == 0);
+	assert(partial.requestToken != oldToken); // reject cancelled completion
+	assert((partial.requestCursors == std::vector<int>{ 0 }));
+	assert(partial.requestWaiters.empty());
+	assert(lists.at(2).loaded && lists.at(2).fullCount == 1);
+	assert((lists.at(2).requestCursors == std::vector<int>{ 0 }));
+	assert(lists.at(2).requestWaiters.empty());
+	for (auto &callback : waiters) {
+		callback();
+	}
+	assert(notified == 2);
+	// A repeated restart must not remove a successfully consumed cursor,
+	// cancel twice, or retain old waiters.
+	assert(RestartQueryCaches(lists, false, cancel).empty());
+	assert(cancelled.size() == 1);
+	assert((lists.at(1).requestCursors == std::vector<int>{ 0 }));
+	// Switching ordinary/restricted mode invalidates incompatible results,
+	// including loaded results, and drains an in-flight request exactly once.
+	lists.at(1).requestId = 18;
+	lists.at(1).requestCursors.push_back(8);
+	lists.at(1).requestWaiters.push_back([&] { ++notified; });
+	waiters = RestartQueryCaches(lists, true, cancel);
+	assert(lists.empty());
+	assert((cancelled == std::vector<int>{ 17, 18 }));
+	assert(waiters.size() == 1);
+	waiters.front()();
+	assert(notified == 3);
+	assert(RestartQueryCaches(lists, true, cancel).empty());
+}
 
 struct MockPaginator {
 	int total = 260;
@@ -41,6 +126,7 @@ struct MockPaginator {
 } // namespace
 
 int main() {
+	CheckQueryCacheRestart();
 	// The first 100 items cover the viewport; neither top-edge checks nor
 	// repeated layout checks should eagerly consume the remaining pages.
 	auto paginator = MockPaginator{};

@@ -201,8 +201,7 @@ constexpr auto kPreviewPostsLimit = 3;
 	if (loading) {
 		text.append(tr::lng_contacts_loading(tr::now));
 	} else if (incomplete) {
-		text.append(incompleteStatus).append("\n\n").append(
-			tr::link(tr::lng_settings_restricted_search_retry(tr::now)));
+		text.append(tr::link(incompleteStatus));
 	} else if (waiting) {
 		if (hashtag) {
 			text.append(tr::lng_search_tab_by_hashtag(tr::now));

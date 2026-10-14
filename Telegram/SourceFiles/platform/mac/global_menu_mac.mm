@@ -355,7 +355,7 @@ void Manager::buildAppleMenu(QMenu *main) {
 			});
 		};
 		const auto about = main->addAction(
-			u"About Telegram"_q,
+			u"About FishGram"_q,
 			std::move(callback));
 		about->setMenuRole(QAction::AboutQtRole);
 	}

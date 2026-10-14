@@ -6,6 +6,7 @@ For license and copyright information please follow this link:
 https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "info/global_media/info_global_media_provider.h"
+#include "info/global_media/global_media_query_cache.h"
 #include "info/global_media/restricted_global_media_pagination.h"
 
 #include "apiwrap.h"
@@ -120,6 +121,7 @@ Provider::Provider(not_null<AbstractController*> controller)
 , _session(&controller->session())
 , _type(_controller->section().mediaType())
 , _onlyForwardable(_controller->key().globalMediaOnlyForwardable())
+, _restrictedSearchEnabled(_session->settings().restrictedGlobalSearchEnabled())
 , _slice(sliceKey(_aroundId)) {
 	_controller->session().data().itemRemoved(
 	) | rpl::on_next([this](auto item) {
@@ -197,6 +199,7 @@ std::optional<int> Provider::fullCount() {
 }
 
 void Provider::restart() {
+	_viewerLifetime.destroy();
 	_layouts.clear();
 	++_generation;
 	_aroundId = Data::MaxMessagePosition;
@@ -212,19 +215,15 @@ void Provider::restart() {
 	if (_restrictedSearch) {
 		_restrictedSearch->cancel();
 	}
-	auto waiters = std::vector<Fn<void()>>();
-	for (auto &entry : _totalLists) {
-		if (entry.second.requestId) {
-			_session->api().request(base::take(entry.second.requestId)).cancel();
-		}
-		auto pending = base::take(entry.second.requestWaiters);
-		waiters.insert(
-			waiters.end(),
-			std::make_move_iterator(begin(pending)),
-			std::make_move_iterator(end(pending)));
+	const auto restricted = _session->settings().restrictedGlobalSearchEnabled();
+	const auto modeChanged = (_restrictedSearchEnabled != restricted);
+	_restrictedSearchEnabled = restricted;
+	auto waiters = RestartQueryCaches(_totalLists, modeChanged, [=](auto id) {
+		_session->api().request(id).cancel();
+	});
+	if (modeChanged) {
+		_seenIds.clear();
 	}
-	_totalLists.clear();
-	_seenIds.clear();
 	for (auto &callback : waiters) {
 		callback();
 	}
