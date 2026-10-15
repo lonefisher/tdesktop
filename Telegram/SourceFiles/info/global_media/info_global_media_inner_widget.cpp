@@ -6,6 +6,7 @@ For license and copyright information please follow this link:
 https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "info/global_media/info_global_media_inner_widget.h"
+#include "info/global_media/global_media_empty_state.h"
 #include "ui/restricted_search_status.h"
 
 #include "info/global_media/info_global_media_provider.h"
@@ -38,9 +39,10 @@ InnerWidget::InnerWidget(
 	_list = setupList();
 	_controller->searchQueryValue(
 	) | rpl::on_next([this](const QString &query) {
-		_empty->setSearchQuery(query);
-		_empty->setStatus(QString(), [] {});
-		_empty->setLoadedCount(std::nullopt);
+		UpdateQueryEmptyState(
+			*_empty,
+			query,
+			_list->globalMediaRestrictedSearchRetryable());
 		_empty->setLoading(_list->globalMediaRestrictedSearchLoading());
 	}, _list->lifetime());
 	_list->heightValue() | rpl::on_next([=] {

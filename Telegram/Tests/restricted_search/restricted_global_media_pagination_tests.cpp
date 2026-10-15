@@ -1,3 +1,4 @@
+#include "info/global_media/global_media_empty_state.h"
 #include "info/global_media/global_media_query_cache.h"
 #include "info/global_media/restricted_global_media_pagination.h"
 
@@ -7,12 +8,52 @@
 #include <iostream>
 #include <map>
 #include <optional>
+#include <string>
 #include <utility>
 #include <vector>
 
 using namespace Info::GlobalMedia::Pagination;
 
 namespace {
+
+struct EmptyPresentation {
+	std::string query;
+	std::string status;
+	std::function<void()> retry;
+	std::optional<int> loadedCount;
+
+	void setSearchQuery(const std::string &value) { query = value; }
+	void setStatus(std::string value, std::function<void()> callback) {
+		status = std::move(value);
+		retry = std::move(callback);
+	}
+	void setLoadedCount(std::optional<int> value) { loadedCount = value; }
+};
+
+void CheckCachedFailurePresentation() {
+	using Info::GlobalMedia::UpdateQueryEmptyState;
+	auto empty = EmptyPresentation{};
+	auto retries = 0;
+	const auto query = std::string("A");
+	empty.setStatus("Search failed. Click to retry.", [&] { ++retries; });
+	empty.setLoadedCount(0);
+	UpdateQueryEmptyState(empty, query, true);
+	assert(empty.query == "A");
+	assert(empty.status == "Search failed. Click to retry.");
+	empty.retry();
+	assert(retries == 1);
+	assert(empty.loadedCount == 0);
+	UpdateQueryEmptyState(empty, std::string("B"), false);
+	assert(empty.query == "B" && empty.status.empty());
+	assert(!empty.loadedCount);
+	empty.retry();
+	assert(retries == 1);
+	empty.setStatus("Search failed. Click to retry.", [&] { ++retries; });
+	UpdateQueryEmptyState(empty, query, false);
+	assert(empty.query == "A" && empty.status.empty());
+	empty.retry();
+	assert(retries == 1);
+}
 
 struct QueryList {
 	std::vector<int> list;
@@ -226,6 +267,7 @@ struct MockPaginator {
 } // namespace
 
 int main() {
+	CheckCachedFailurePresentation();
 	CheckFailedQueryPage();
 	CheckQueryCacheRestart();
 	// The first 100 items cover the viewport; neither top-edge checks nor
