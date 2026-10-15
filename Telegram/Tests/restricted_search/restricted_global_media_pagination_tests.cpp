@@ -26,11 +26,14 @@ struct QueryList {
 	std::vector<std::function<void()>> requestWaiters;
 	std::vector<int> requestCursors;
 	bool loaded = false;
+	bool failed = false;
 };
 
 void CheckFailedQueryPage() {
 	using Info::GlobalMedia::CompleteQueryRequest;
+	using Info::GlobalMedia::QueryPageCanLoad;
 	using Info::GlobalMedia::RestartQueryCaches;
+	using Info::GlobalMedia::RetryQueryRequest;
 	auto lists = std::map<int, QueryList>();
 	auto &first = lists[1];
 	first.requestId = 17;
@@ -42,11 +45,32 @@ void CheckFailedQueryPage() {
 	assert(!first.loaded && first.requestId == 0);
 	assert(first.requestToken == 1); // stale completions no longer match
 	assert(first.requestCursors.empty());
-	assert(first.requestWaiters.empty() && notifications == 0);
+	assert(first.requestWaiters.size() == 1 && notifications == 0);
+	assert(first.failed);
+	auto failed = std::exchange(first.requestWaiters, {});
+	failed.front()();
+	assert(notifications == 1 && !QueryPageCanLoad(first));
 	// A -> B -> A must retain a retryable first page, not a loaded empty list.
 	const auto cancel = [](int) { assert(false); };
 	assert(RestartQueryCaches(lists, false, cancel).empty());
 	assert(lists.size() == 1 && !lists.at(1).loaded);
+	assert(RetryQueryRequest(first));
+	assert(QueryPageCanLoad(first));
+	assert(!RetryQueryRequest(first));
+	first.requestId = 18;
+	first.requestCursors.push_back(0);
+	first.requestWaiters.push_back([&] { ++notifications; });
+	assert(!CompleteQueryRequest(first, true, true));
+	failed = std::exchange(first.requestWaiters, {});
+	failed.front()();
+	assert(notifications == 2 && !QueryPageCanLoad(first));
+	assert(RetryQueryRequest(first));
+	first.requestId = 19;
+	first.requestCursors.push_back(0);
+	assert(CompleteQueryRequest(first, false, true));
+	assert(first.loaded && !first.failed && !QueryPageCanLoad(first));
+	assert(RestartQueryCaches(lists, false, cancel).empty());
+	assert(lists.size() == 1 && lists.at(1).loaded);
 	// Successful pages remain cached when a later page fails. Only the
 	// failed page's cursor is rolled back, leaving the loop guard intact.
 	auto &partial = lists[2];
@@ -63,7 +87,10 @@ void CheckFailedQueryPage() {
 	assert(!partial.loaded && partial.requestId == 0);
 	assert(partial.requestToken == 1);
 	assert((partial.requestCursors == std::vector<int>{ 0 }));
-	assert(partial.requestWaiters.empty() && notifications == 0);
+	assert(partial.requestWaiters.size() == 1 && notifications == 2);
+	failed = std::exchange(partial.requestWaiters, {});
+	failed.front()();
+	assert(notifications == 3 && !QueryPageCanLoad(partial));
 	assert(RestartQueryCaches(lists, false, cancel).empty());
 	assert((partial.list == std::vector<int>{ 9, 8 }));
 	assert((partial.ids == std::vector<int>{ 9, 8 }));
@@ -72,16 +99,20 @@ void CheckFailedQueryPage() {
 	// Retrying that same cursor can now complete; a genuine exhausted page
 	// stays loaded and keeps its cursor and successful items on restart.
 	partial.requestId = 19;
+	assert(!RetryQueryRequest(partial));
+	partial.requestId = 0;
+	assert(RetryQueryRequest(partial));
+	partial.requestId = 19;
 	partial.requestCursors.push_back(8);
 	partial.requestWaiters.push_back([&] { ++notifications; });
 	assert(CompleteQueryRequest(partial, false, true));
 	assert(partial.loaded && partial.requestId == 0);
-	assert(partial.requestWaiters.size() == 1 && notifications == 0);
+	assert(partial.requestWaiters.size() == 1 && notifications == 3);
 	assert((partial.requestCursors == std::vector<int>{ 0, 8 }));
 	// Provider drains the successful page's waiters after merging its data.
 	auto completed = std::exchange(partial.requestWaiters, {});
 	completed.front()();
-	assert(notifications == 1);
+	assert(notifications == 4);
 	assert(RestartQueryCaches(lists, false, cancel).empty());
 	assert(partial.loaded && partial.list.size() == 2);
 	auto empty = QueryList{};

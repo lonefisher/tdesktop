@@ -99,7 +99,7 @@ void EmptyWidget::setStatus(QString status, Fn<void()> retry) {
 	_status = std::move(status);
 	_retry = std::move(retry);
 	if (!_status.isEmpty()) {
-		_text->setText(_status);
+		_text->setMarkedText(tr::link(_status));
 		_text->setClickHandlerFilter([=](const ClickHandlerPtr &, Qt::MouseButton) {
 			if (_retry) {
 				_retry();

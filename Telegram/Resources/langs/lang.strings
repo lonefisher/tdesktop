@@ -6010,6 +6010,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 "lng_search_loaded_results#other" = "Loaded {count} messages";
 "lng_settings_restricted_search_incomplete" = "Some chats could not be searched";
 "lng_settings_restricted_search_retry" = "Retry restricted search";
+"lng_fishgram_media_search_failed" = "Search failed. Click to retry.";
 "lng_restricted_search_network" = "Network error";
 "lng_restricted_search_flood" = "Rate limit";
 "lng_restricted_search_timeout" = "Request timed out";

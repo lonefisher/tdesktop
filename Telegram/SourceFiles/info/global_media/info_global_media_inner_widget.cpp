@@ -13,6 +13,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "info/media/info_media_empty_widget.h"
 #include "info/media/info_media_list_widget.h"
 #include "info/info_controller.h"
+#include "main/main_session.h"
+#include "main/main_session_settings.h"
 #include "ui/widgets/labels.h"
 #include "ui/search_field_controller.h"
 #include "lang/lang_keys.h"
@@ -63,7 +65,9 @@ InnerWidget::InnerWidget(
 		}
 		auto text = QString();
 		if (snapshot->partial) {
-			text = Ui::RestrictedSearchFailureText(snapshot->error);
+			text = _controller->session().settings().restrictedGlobalSearchEnabled()
+				? Ui::RestrictedSearchFailureText(snapshot->error)
+				: tr::lng_fishgram_media_search_failed(tr::now);
 		} else if (!snapshot->exactTotal
 			&& (snapshot->hasMore
 				|| _list->globalMediaRestrictedSearchLoading())) {
@@ -82,7 +86,11 @@ InnerWidget::InnerWidget(
 		_empty->setLoadedCount(snapshot->hasMore
 			? std::make_optional(snapshot->loadedCount)
 			: std::nullopt);
-		_status->setText(text);
+		if (snapshot->partial) {
+			_status->setMarkedText(tr::link(text));
+		} else {
+			_status->setText(text);
+		}
 		auto filter = Ui::FlatLabel::ClickHandlerFilter();
 		if (snapshot->partial) {
 			filter = [=](const ClickHandlerPtr &, Qt::MouseButton) {

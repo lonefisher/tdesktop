@@ -354,7 +354,7 @@ rpl::producer<Provider::SliceUpdate> Provider::source(
 			}
 			// The list could have been rehashed inside put_next().
 			const auto list = that->listForQuery(pushedQuery);
-			if (!list->loaded && result.notEnough) {
+			if (QueryPageCanLoad(*list) && result.notEnough) {
 				that->requestMore(pushedQuery, pushedGeneration, [weak] {
 					if (weak) {
 						weak->pushAndLoadMore();
@@ -393,6 +393,9 @@ void Provider::requestMore(
 		return;
 	}
 	const auto list = listForQuery(query);
+	if (list->failed) {
+		return;
+	}
 	if (list->loaded) {
 		loaded();
 		return;
@@ -431,6 +434,10 @@ void Provider::requestMore(
 				*list,
 				result.failed,
 				!result.offsetPosition || !result.offsetRate)) {
+			auto waiters = base::take(list->requestWaiters);
+			for (auto &callback : waiters) {
+				callback();
+			}
 			return;
 		}
 		if (result.offsetPosition) {
@@ -513,6 +520,21 @@ std::optional<GlobalMediaSliceSnapshot> Provider::makeSnapshot(
 	const auto skippedBefore = update.slice.skippedBefore();
 	const auto restricted = _session->settings()
 		.restrictedGlobalSearchEnabled();
+	const auto cached = _totalLists.find(update.query);
+	if (!restricted && cached != end(_totalLists) && cached->second.failed) {
+		return GlobalMediaSliceSnapshot{
+			.query = update.query,
+			.generation = update.generation,
+			.fullCount = cached->second.fullCount,
+			.skippedAfter = skippedAfter.value_or(0),
+			.skippedBefore = skippedBefore.value_or(1),
+			.loadedCount = int(cached->second.list.size()),
+			.hasMore = true,
+			.partial = true,
+			.positions = update.slice.items(),
+			.error = Api::RestrictedGlobalSearchCoordinator::ErrorKind::Network,
+		};
+	}
 	if (restricted) {
 		if (!skippedAfter || !skippedBefore) {
 			return std::nullopt;
@@ -758,6 +780,12 @@ bool Provider::restrictedSearchLoading() const {
 }
 
 bool Provider::restrictedSearchRetryable() const {
+	if (!_restrictedSearchEnabled) {
+		const auto list = _totalLists.find(_totalListQuery);
+		return list != end(_totalLists)
+			&& list->second.failed
+			&& !list->second.requestId;
+	}
 	return _restrictedSearchPartial && _restrictedSearch
 		&& !_restrictedSearchPending
 		&& !_restrictedSearchHasMore
@@ -771,12 +799,25 @@ std::optional<int> Provider::restrictedSearchLoadedCount() const {
 }
 
 crl::time Provider::restrictedSearchCooldown() const {
-	return _restrictedSearch
+	return (_restrictedSearchEnabled && _restrictedSearch)
 		? _restrictedSearch->cooldownLeft()
 		: crl::time(0);
 }
 
 void Provider::retryRestrictedSearch() {
+	if (!_restrictedSearchEnabled) {
+		if (RetryQueryRequest(*listForQuery(_totalListQuery))) {
+			_edgeRequest = std::nullopt;
+			const auto query = _totalListQuery;
+			const auto generation = _generation;
+			requestMore(query, generation, [=] {
+				if (_generation == generation && _totalListQuery == query) {
+					refreshViewer();
+				}
+			});
+		}
+		return;
+	}
 	if (!restrictedSearchRetryable()) {
 		return;
 	}

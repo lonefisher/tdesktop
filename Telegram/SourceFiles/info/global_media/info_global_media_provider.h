@@ -187,6 +187,7 @@ private:
 		std::vector<Fn<void()>> requestWaiters;
 		std::vector<RequestCursor> requestCursors;
 		bool loaded = false;
+		bool failed = false;
 	};
 	struct EdgeRequestKey {
 		enum class Direction : uchar {

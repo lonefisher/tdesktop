@@ -13,6 +13,20 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 namespace Info::GlobalMedia {
 
 template <typename List>
+[[nodiscard]] bool QueryPageCanLoad(const List &list) {
+	return !list.loaded && !list.failed;
+}
+
+template <typename List>
+[[nodiscard]] bool RetryQueryRequest(List &list) {
+	if (!list.failed || list.requestId) {
+		return false;
+	}
+	list.failed = false;
+	return true;
+}
+
+template <typename List>
 [[nodiscard]] bool CompleteQueryRequest(
 		List &list,
 		bool failed,
@@ -24,11 +38,11 @@ template <typename List>
 			list.requestCursors.pop_back();
 		}
 		list.loaded = false;
-		// These callbacks push the slice and request more recursively. Drop
-		// them on failure: the next viewer request retries the same cursor.
-		list.requestWaiters.clear();
+		list.failed = true;
+		// Keep waiters so empty failures publish a retry action without a query change.
 		return false;
 	}
+	list.failed = false;
 	list.loaded = exhausted;
 	return true;
 }
@@ -42,8 +56,7 @@ template <typename Lists, typename CancelRequest>
 	for (auto &entry : lists) {
 		auto &list = entry.second;
 		if (list.requestId) {
-			// The final cursor belongs to the cancelled, unconsumed page.
-			// Keep completed cursors so the loop guard still works.
+			// Keep consumed cursors so cancellation cannot defeat pagination loop detection.
 			++list.requestToken;
 			if (!list.requestCursors.empty()) {
 				list.requestCursors.pop_back();
