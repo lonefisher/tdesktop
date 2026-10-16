@@ -3756,7 +3756,7 @@ mtpRequestId ApiWrap::requestGlobalMedia(
 		type,
 		query);
 	if (!prepared) {
-		done({});
+		done({ .failed = true });
 		return 0;
 	}
 	return request(
@@ -3764,7 +3764,7 @@ mtpRequestId ApiWrap::requestGlobalMedia(
 	).done([=](const Api::SearchRequestResult &result) {
 		done(Api::ParseGlobalMediaResult(_session, result, onlyForwardable));
 	}).fail([=] {
-		done({});
+		done({ .failed = true });
 	}).send();
 }
 

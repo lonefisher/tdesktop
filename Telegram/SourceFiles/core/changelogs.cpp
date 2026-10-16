@@ -7,6 +7,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "core/changelogs.h"
 
+#include "boxes/about_box.h"
 #include "lang/lang_keys.h"
 #include "core/application.h"
 #include "core/update_channel.h"
@@ -110,10 +111,10 @@ void Changelogs::addLocalLogs() {
 		addBetaLogs();
 	}
 	if (!_addedSomeLocal) {
-		const auto text = tr::lng_new_version_wrap(
+		const auto text = tr::lng_fishgram_new_version_wrap(
 			tr::now,
 			lt_version,
-			QString::fromLatin1(AppVersionStr),
+			currentVersionText(),
 			lt_changes,
 			tr::lng_new_version_minor(tr::now),
 			lt_link,

@@ -31,6 +31,9 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 "lng_open_from_tray" = "Open Telegram";
 "lng_minimize_to_tray" = "Minimize to Tray";
 "lng_quit_from_tray" = "Quit Telegram";
+"lng_fishgram_open_from_tray" = "Open FishGram";
+"lng_fishgram_quit_from_tray" = "Quit FishGram";
+"lng_fishgram_tray_icon_text" = "FishGram is still running here,\nyou can change this in Settings.\nIf it disappears from the tray,\nyou can drag it back from the hidden icons.";
 "lng_tray_icon_text" = "Telegram is still running here,\nyou can change this in Settings.\nIf it disappears from the tray,\nyou can drag it back from the hidden icons.";
 
 // For lng_month_year or plain month name.
@@ -385,6 +388,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 "lng_edit_caption_voice" = "Sorry, you can't edit messages when you have an unsent voice message.";
 
 "lng_intro_about" = "Welcome to the official Telegram Desktop app.\nIt's fast and secure.";
+"lng_fishgram_intro_about" = "FishGram is an unofficial Telegram client.\nBuilt using the Telegram API.";
 "lng_start_msgs" = "Start Messaging";
 
 "lng_intro_next" = "Next";
@@ -480,6 +484,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 "lng_forum_create_new_topic" = "Create New Thread";
 "lng_dlg_search_for_messages" = "Search for messages";
 "lng_update_telegram" = "Update Telegram";
+"lng_fishgram_update" = "Update FishGram";
 "lng_dlg_search_in" = "Search messages in";
 "lng_dlg_search_from" = "From: {user}";
 "lng_chat_menu" = "Chat menu";
@@ -5991,6 +5996,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 "lng_about_version" = "version {version}";
 "lng_about_text1" = "Official free messaging app based on {api_link}\nfor speed and security.";
+"lng_fishgram_about_text1" = "FishGram is an unofficial client based on {api_link}.";
 "lng_about_text1_api" = "Telegram API";
 "lng_about_text2" = "This software is licensed under {gpl_link} version 3.\nSource code is available on {github_link}.";
 "lng_about_text3" = "Visit the {faq_link} for more info.";
@@ -6004,6 +6010,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 "lng_search_loaded_results#other" = "Loaded {count} messages";
 "lng_settings_restricted_search_incomplete" = "Some chats could not be searched";
 "lng_settings_restricted_search_retry" = "Retry restricted search";
+"lng_fishgram_media_search_failed" = "Search failed. Click to retry.";
 "lng_restricted_search_network" = "Network error";
 "lng_restricted_search_flood" = "Rate limit";
 "lng_restricted_search_timeout" = "Request timed out";
@@ -6199,6 +6206,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 "lng_theme_preview_users#other" = "{count} people are using this theme";
 
 "lng_new_version_wrap" = "Telegram Desktop was updated to version {version}\n\n{changes}\n\nFull version history is available here:\n{link}";
+"lng_fishgram_new_version_wrap" = "FishGram was updated to version {version}\n\n{changes}\n\nFull version history is available here:\n{link}";
 "lng_new_version_minor" = "— Bug fixes and other minor improvements";
 
 "lng_menu_insert_unicode" = "Insert Unicode control character";

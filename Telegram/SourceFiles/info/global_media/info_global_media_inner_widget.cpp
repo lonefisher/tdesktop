@@ -6,6 +6,7 @@ For license and copyright information please follow this link:
 https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "info/global_media/info_global_media_inner_widget.h"
+#include "info/global_media/global_media_empty_state.h"
 #include "ui/restricted_search_status.h"
 
 #include "info/global_media/info_global_media_provider.h"
@@ -13,6 +14,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "info/media/info_media_empty_widget.h"
 #include "info/media/info_media_list_widget.h"
 #include "info/info_controller.h"
+#include "main/main_session.h"
+#include "main/main_session_settings.h"
 #include "ui/widgets/labels.h"
 #include "ui/search_field_controller.h"
 #include "lang/lang_keys.h"
@@ -34,6 +37,14 @@ InnerWidget::InnerWidget(
 		[this] { refreshHeight(); },
 		_empty->lifetime());
 	_list = setupList();
+	_controller->searchQueryValue(
+	) | rpl::on_next([this](const QString &query) {
+		UpdateQueryEmptyState(
+			*_empty,
+			query,
+			_list->globalMediaRestrictedSearchRetryable());
+		_empty->setLoading(_list->globalMediaRestrictedSearchLoading());
+	}, _list->lifetime());
 	_list->heightValue() | rpl::on_next([=] {
 		const auto loading = _list->globalMediaRestrictedSearchLoading();
 		_empty->setLoading(loading);
@@ -56,7 +67,9 @@ InnerWidget::InnerWidget(
 		}
 		auto text = QString();
 		if (snapshot->partial) {
-			text = Ui::RestrictedSearchFailureText(snapshot->error);
+			text = _controller->session().settings().restrictedGlobalSearchEnabled()
+				? Ui::RestrictedSearchFailureText(snapshot->error)
+				: tr::lng_fishgram_media_search_failed(tr::now);
 		} else if (!snapshot->exactTotal
 			&& (snapshot->hasMore
 				|| _list->globalMediaRestrictedSearchLoading())) {
@@ -75,7 +88,11 @@ InnerWidget::InnerWidget(
 		_empty->setLoadedCount(snapshot->hasMore
 			? std::make_optional(snapshot->loadedCount)
 			: std::nullopt);
-		_status->setText(text);
+		if (snapshot->partial) {
+			_status->setMarkedText(tr::link(text));
+		} else {
+			_status->setText(text);
+		}
 		auto filter = Ui::FlatLabel::ClickHandlerFilter();
 		if (snapshot->partial) {
 			filter = [=](const ClickHandlerPtr &, Qt::MouseButton) {
@@ -114,14 +131,6 @@ object_ptr<Media::ListWidget> InnerWidget::setupList() {
 	}) | rpl::start_to_stream(
 		_scrollToRequests,
 		result->lifetime());
-
-	_controller->searchQueryValue(
-	) | rpl::on_next([this](const QString &query) {
-		_empty->setSearchQuery(query);
-		_empty->setStatus(QString(), [] {});
-		_empty->setLoadedCount(std::nullopt);
-		_empty->setLoading(_list->globalMediaRestrictedSearchLoading());
-	}, result->lifetime());
 
 	return result;
 }

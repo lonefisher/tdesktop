@@ -6,6 +6,7 @@ For license and copyright information please follow this link:
 https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "info/global_media/info_global_media_provider.h"
+#include "info/global_media/global_media_query_cache.h"
 #include "info/global_media/restricted_global_media_pagination.h"
 
 #include "apiwrap.h"
@@ -120,11 +121,8 @@ Provider::Provider(not_null<AbstractController*> controller)
 , _session(&controller->session())
 , _type(_controller->section().mediaType())
 , _onlyForwardable(_controller->key().globalMediaOnlyForwardable())
+, _restrictedSearchEnabled(_session->settings().restrictedGlobalSearchEnabled())
 , _slice(sliceKey(_aroundId)) {
-	_session->settings().restrictedGlobalSearchEnabledValue(
-	) | rpl::skip(1) | rpl::on_next([=] {
-		restart();
-	}, _lifetime);
 	_controller->session().data().itemRemoved(
 	) | rpl::on_next([this](auto item) {
 		itemRemoved(item);
@@ -201,6 +199,7 @@ std::optional<int> Provider::fullCount() {
 }
 
 void Provider::restart() {
+	_viewerLifetime.destroy();
 	_layouts.clear();
 	++_generation;
 	_aroundId = Data::MaxMessagePosition;
@@ -216,13 +215,14 @@ void Provider::restart() {
 	if (_restrictedSearch) {
 		_restrictedSearch->cancel();
 	}
-	auto waiters = std::vector<Fn<void()>>();
-	for (auto &entry : _totalLists) {
-		auto pending = base::take(entry.second.requestWaiters);
-		waiters.insert(
-			waiters.end(),
-			std::make_move_iterator(begin(pending)),
-			std::make_move_iterator(end(pending)));
+	const auto restricted = _session->settings().restrictedGlobalSearchEnabled();
+	const auto modeChanged = (_restrictedSearchEnabled != restricted);
+	_restrictedSearchEnabled = restricted;
+	auto waiters = RestartQueryCaches(_totalLists, modeChanged, [=](auto id) {
+		_session->api().request(id).cancel();
+	});
+	if (modeChanged) {
+		_seenIds.clear();
 	}
 	for (auto &callback : waiters) {
 		callback();
@@ -354,7 +354,7 @@ rpl::producer<Provider::SliceUpdate> Provider::source(
 			}
 			// The list could have been rehashed inside put_next().
 			const auto list = that->listForQuery(pushedQuery);
-			if (!list->loaded && result.notEnough) {
+			if (QueryPageCanLoad(*list) && result.notEnough) {
 				that->requestMore(pushedQuery, pushedGeneration, [weak] {
 					if (weak) {
 						weak->pushAndLoadMore();
@@ -393,6 +393,9 @@ void Provider::requestMore(
 		return;
 	}
 	const auto list = listForQuery(query);
+	if (list->failed) {
+		return;
+	}
 	if (list->loaded) {
 		loaded();
 		return;
@@ -420,15 +423,24 @@ void Provider::requestMore(
 	list->requestCursors.push_back(cursor);
 	const auto token = ++list->requestToken;
 	const auto done = [=](const Api::GlobalMediaResult &result) {
+		if (_generation != generation) {
+			return;
+		}
 		const auto list = listForQuery(query);
 		if (list->requestToken != token) {
 			return;
 		}
-		list->requestId = 0;
-
-		if (!result.offsetPosition) {
-			list->loaded = true;
-		} else {
+		if (!CompleteQueryRequest(
+				*list,
+				result.failed,
+				!result.offsetPosition || !result.offsetRate)) {
+			auto waiters = base::take(list->requestWaiters);
+			for (auto &callback : waiters) {
+				callback();
+			}
+			return;
+		}
+		if (result.offsetPosition) {
 			list->filteredCount += result.filteredCount;
 			list->list.reserve(
 				list->list.size() + result.messageIds.size());
@@ -443,7 +455,6 @@ void Provider::requestMore(
 			ranges::sort(list->list, std::greater<>());
 			list->offsetPosition = result.offsetPosition;
 			list->offsetRate = result.offsetRate;
-			list->loaded = !result.offsetRate;
 		}
 		list->fullCount = list->loaded
 			? int(list->list.size())
@@ -509,6 +520,21 @@ std::optional<GlobalMediaSliceSnapshot> Provider::makeSnapshot(
 	const auto skippedBefore = update.slice.skippedBefore();
 	const auto restricted = _session->settings()
 		.restrictedGlobalSearchEnabled();
+	const auto cached = _totalLists.find(update.query);
+	if (!restricted && cached != end(_totalLists) && cached->second.failed) {
+		return GlobalMediaSliceSnapshot{
+			.query = update.query,
+			.generation = update.generation,
+			.fullCount = cached->second.fullCount,
+			.skippedAfter = skippedAfter.value_or(0),
+			.skippedBefore = skippedBefore.value_or(1),
+			.loadedCount = int(cached->second.list.size()),
+			.hasMore = true,
+			.partial = true,
+			.positions = update.slice.items(),
+			.error = Api::RestrictedGlobalSearchCoordinator::ErrorKind::Network,
+		};
+	}
 	if (restricted) {
 		if (!skippedAfter || !skippedBefore) {
 			return std::nullopt;
@@ -754,6 +780,12 @@ bool Provider::restrictedSearchLoading() const {
 }
 
 bool Provider::restrictedSearchRetryable() const {
+	if (!_restrictedSearchEnabled) {
+		const auto list = _totalLists.find(_totalListQuery);
+		return list != end(_totalLists)
+			&& list->second.failed
+			&& !list->second.requestId;
+	}
 	return _restrictedSearchPartial && _restrictedSearch
 		&& !_restrictedSearchPending
 		&& !_restrictedSearchHasMore
@@ -767,12 +799,25 @@ std::optional<int> Provider::restrictedSearchLoadedCount() const {
 }
 
 crl::time Provider::restrictedSearchCooldown() const {
-	return _restrictedSearch
+	return (_restrictedSearchEnabled && _restrictedSearch)
 		? _restrictedSearch->cooldownLeft()
 		: crl::time(0);
 }
 
 void Provider::retryRestrictedSearch() {
+	if (!_restrictedSearchEnabled) {
+		if (RetryQueryRequest(*listForQuery(_totalListQuery))) {
+			_edgeRequest = std::nullopt;
+			const auto query = _totalListQuery;
+			const auto generation = _generation;
+			requestMore(query, generation, [=] {
+				if (_generation == generation && _totalListQuery == query) {
+					refreshViewer();
+				}
+			});
+		}
+		return;
+	}
 	if (!restrictedSearchRetryable()) {
 		return;
 	}

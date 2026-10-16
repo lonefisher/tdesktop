@@ -60,6 +60,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "main/main_account.h"
 #include "main/main_app_config.h"
 #include "main/main_session.h"
+#include "main/main_session_settings.h"
 #include "mainwidget.h"
 #include "mainwindow.h"
 #include "base/platform/base_platform_info.h"
@@ -237,6 +238,14 @@ void ListWidget::start() {
 		restart();
 	} else {
 		trackSession(&session());
+
+		if (_controller->key().isGlobalMedia()) {
+			session().settings().restrictedGlobalSearchEnabledValue(
+			) | rpl::skip(1) | rpl::on_next([this] {
+				// Drop view pointers before the provider destroys layouts.
+				restart();
+			}, lifetime());
+		}
 
 		(_controller->key().isGlobalMedia()
 			? _controller->searchQueryValue()

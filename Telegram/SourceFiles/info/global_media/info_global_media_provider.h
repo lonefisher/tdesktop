@@ -187,6 +187,7 @@ private:
 		std::vector<Fn<void()>> requestWaiters;
 		std::vector<RequestCursor> requestCursors;
 		bool loaded = false;
+		bool failed = false;
 	};
 	struct EdgeRequestKey {
 		enum class Direction : uchar {
@@ -253,6 +254,7 @@ private:
 	const not_null<Main::Session*> _session;
 	const Type _type = {};
 	const bool _onlyForwardable = false;
+	bool _restrictedSearchEnabled = false;
 
 	Data::MessagePosition _aroundId = Data::MaxMessagePosition;
 	int _idsLimit = kMinimalIdsLimit;

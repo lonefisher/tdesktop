@@ -11,6 +11,16 @@ int main() {
 	assert(pending.finishPage(1));
 	assert(!pending.pending());
 
+	// A completed incomplete search is not a successful empty result.
+	assert(pending.emptyState(true) == Dialogs::RestrictedSearchEmptyState::Incomplete);
+	assert(pending.emptyState(false) == Dialogs::RestrictedSearchEmptyState::Complete);
+	pending.begin(6);
+	assert(pending.emptyState(true) == Dialogs::RestrictedSearchEmptyState::Pending);
+	assert(!pending.finishPage(5));
+	assert(pending.emptyState(true) == Dialogs::RestrictedSearchEmptyState::Pending);
+	assert(pending.finishPage(6));
+	assert(pending.emptyState(true) == Dialogs::RestrictedSearchEmptyState::Incomplete);
+
 	// Cancelling a query invalidates late pages, including after a new query.
 	pending.begin(2);
 	pending.cancel(3);
