@@ -83,9 +83,8 @@ if (DESKTOP_APP_TEST_APPS OR TDESKTOP_BUILD_UPDATE_TESTS)
     include(cmake/test_update_verify.cmake)
     if (NOT DESKTOP_APP_DISABLE_AUTOUPDATE)
         include(cmake/test_update_unpack.cmake)
-        if (WIN32 AND NOT build_winstore)
-            include(cmake/test_updater_win.cmake)
-        endif()
+        # FishGram Windows updater tests use the transaction and restart
+        # targets configured by the parent tools/test-update-verify.ps1.
     endif()
 endif()
 
