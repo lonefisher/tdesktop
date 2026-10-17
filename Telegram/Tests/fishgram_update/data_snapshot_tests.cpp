@@ -246,6 +246,24 @@ void TestRetentionKeepsTwoSnapshots() {
 	assert(snapshots.size() == 2);
 }
 
+void TestInterruptedPartialStopsFurtherSnapshots() {
+	Fixture f;
+	f.Write(f.work + QStringLiteral("/tdata/item"), "current");
+	QString error;
+	assert(TakeSnapshot(f.work, f.exe, &error));
+	const auto root = SnapshotRoot(f.work);
+	const auto partial = root + QStringLiteral("/.partial-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+	assert(QDir().mkdir(partial));
+	Private(partial);
+	f.Write(partial + QStringLiteral("/item"), "interrupted copy");
+	assert(!TakeSnapshot(f.work, f.exe, &error));
+	assert(error.contains(QStringLiteral("Incomplete snapshot")));
+	assert(QDir(root).entryList({ QStringLiteral("snapshot-*") }, QDir::Dirs | QDir::NoDotAndDotDot).size() == 1);
+	QFile retained(partial + QStringLiteral("/item"));
+	assert(retained.open(QIODevice::ReadOnly));
+	assert(retained.readAll() == QByteArray("interrupted copy"));
+}
+
 void TestJunctionIsRejectedWithoutReadingOutsideTarget() {
 	Fixture f;
 	const auto outside = f.temp.path() + QStringLiteral("/outside");
@@ -295,6 +313,7 @@ int main(int argc, char **argv) {
 	TestGuardAllowsChildCreationAndWrite();
 	TestFailuresDoNotPublishPartialSnapshot();
 	TestRetentionKeepsTwoSnapshots();
+	TestInterruptedPartialStopsFurtherSnapshots();
 	TestJunctionIsRejectedWithoutReadingOutsideTarget();
 	std::cout << "FishGram data snapshot tests passed\n";
 }
