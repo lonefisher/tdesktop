@@ -22,7 +22,7 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           repository: lonefisher/fishgram
-          ref: 68bc957d7bf2c94aa4c4be2ebb2b3da02ef813e6
+          ref: 0b7ed864c8c4658f80a742593521c41cbb0577a5
           path: product
           persist-credentials: false
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
@@ -47,7 +47,7 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           repository: lonefisher/fishgram
-          ref: 68bc957d7bf2c94aa4c4be2ebb2b3da02ef813e6
+          ref: 0b7ed864c8c4658f80a742593521c41cbb0577a5
           path: product
           persist-credentials: false
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
