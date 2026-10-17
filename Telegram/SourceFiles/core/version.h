@@ -22,9 +22,9 @@ constexpr auto AppId = "{78A74EE4-924F-4D24-B9F5-39E257CDE0F4}"_cs;
 constexpr auto AppNameOld = "FishGram"_cs;
 constexpr auto AppName = "FishGram"_cs;
 constexpr auto AppFile = "Telegram"_cs;
-constexpr auto AppVersion = 7002009;
+constexpr auto AppVersion = 7003001;
 #define FISHGRAM_STRINGIFY_IMPL(value) #value
 #define FISHGRAM_STRINGIFY(value) FISHGRAM_STRINGIFY_IMPL(value)
-constexpr auto AppVersionStr = "7.2.9-r" FISHGRAM_STRINGIFY(FISHGRAM_REVISION);
+constexpr auto AppVersionStr = "7.3.1-r" FISHGRAM_STRINGIFY(FISHGRAM_REVISION);
 constexpr auto AppBetaVersion = false;
 constexpr auto AppAlphaVersion = TDESKTOP_ALPHA_VERSION;
