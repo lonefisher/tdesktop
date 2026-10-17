@@ -340,6 +340,7 @@ bool SnapshotBeforeBaselineUpdate(
 	const auto partialPattern = QRegularExpression(QStringLiteral("^\\.partial-[a-f0-9]{32}$"));
 	for (const auto &name : rootEntries) {
 		if (name == QLatin1String(kMarkerName) || name == QStringLiteral(".snapshot.lock")) continue;
+		if (partialPattern.match(name).hasMatch() && QFileInfo(QDir(root).filePath(name)).isDir()) return Fail(error, QStringLiteral("Incomplete snapshot staging requires manual recovery; private data is preserved."));
 		if (!snapshotPattern.match(name).hasMatch() && !partialPattern.match(name).hasMatch()) return Fail(error, QStringLiteral("Snapshot root contains an unrelated entry."));
 	}
 	if (!IsAbsent(markerPath.toStdWString())) {
