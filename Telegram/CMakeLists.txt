@@ -2773,7 +2773,8 @@ if (NOT DESKTOP_APP_DISABLE_AUTOUPDATE AND NOT build_macstore AND NOT build_wins
         )
     endif()
 
-    if (DESKTOP_APP_SPECIAL_TARGET)
+    option(FISHGRAM_BUILD_PACKER "Build the FishGram update package tool." OFF)
+    if (DESKTOP_APP_SPECIAL_TARGET OR FISHGRAM_BUILD_PACKER)
         add_executable(Packer)
         init_target(Packer)
 
