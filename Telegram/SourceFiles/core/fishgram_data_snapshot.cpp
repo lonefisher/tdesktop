@@ -227,7 +227,7 @@ bool CopyFile(const Entry &entry, const QString &target, QString *error) {
 		if (!read) break;
 		DWORD written = 0;
 		if (!WriteFile(output, buffer.data(), read, &written, nullptr) || written != read) { okay = false; break; }
-		digest.addData(buffer.data(), int(read));
+		digest.addData(QByteArray::fromRawData(buffer.data(), int(read)));
 		total += read;
 	}
 	okay = okay && FlushFileBuffers(output) && total == entry.size && digest.result().toHex() == entry.hash;
