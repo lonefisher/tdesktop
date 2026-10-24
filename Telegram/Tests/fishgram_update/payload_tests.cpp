@@ -1,6 +1,7 @@
 #include "core/fishgram_update_payload.h"
 #include <LzmaLib.h>
 #include <QtCore/QDataStream>
+#include <QtCore/QIODevice>
 #include <QtCore/QStringList>
 #include <cassert>
 #include <cstring>
