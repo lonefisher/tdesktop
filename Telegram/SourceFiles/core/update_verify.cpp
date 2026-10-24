@@ -24,6 +24,7 @@ extern "C" {
 #include <array>
 #include <cstring>
 #include <memory>
+#include <limits>
 
 namespace Core::Updates {
 namespace {
@@ -123,8 +124,11 @@ void SetError(QString *error, const QString &text) {
 }
 
 [[nodiscard]] EvpPkey LoadEd25519Pem(const QByteArray &pem) {
+	if (pem.size() > std::numeric_limits<int>::max()) {
+		return nullptr;
+	}
 	const auto bio = std::unique_ptr<BIO, BioDeleter>(
-		BIO_new_mem_buf(pem.constData(), pem.size()));
+		BIO_new_mem_buf(pem.constData(), int(pem.size())));
 	if (!bio) {
 		return nullptr;
 	}
