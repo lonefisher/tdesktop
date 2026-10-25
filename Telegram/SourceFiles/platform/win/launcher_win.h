@@ -26,13 +26,16 @@ private:
 	std::optional<int> recoverUpdateHook() override;
 
 	bool launchUpdater(UpdaterLaunch action) override;
+	void showUpdateLaunchError() override;
 
 	bool launch(
 		const QString &operation,
 		const QString &binaryPath,
-		const QStringList &argumentsList);
+		const QStringList &argumentsList,
+		bool keepRunning = false);
 
 	Core::FishGramClientGate::Lease _clientSessionLease;
+	QString _updateLaunchError;
 
 };
 

@@ -2,9 +2,34 @@
 #pragma once
 
 #include <Windows.h>
+#include <shellapi.h>
 #include <optional>
+#include <string>
 
 namespace Core::FishGramUpdates {
+
+[[nodiscard]] inline DWORD LaunchUpdateProcess(
+		HWND owner,
+		const std::wstring &operation,
+		const std::wstring &executable,
+		const std::wstring &arguments,
+		const std::wstring &directory,
+		int show = SW_SHOWNORMAL,
+		HANDLE *process = nullptr) {
+	auto info = SHELLEXECUTEINFOW{};
+	info.cbSize = sizeof(info);
+	info.fMask = SEE_MASK_NOASYNC | SEE_MASK_FLAG_NO_UI
+		| (process ? SEE_MASK_NOCLOSEPROCESS : 0);
+	info.hwnd = owner;
+	info.lpVerb = operation.empty() ? nullptr : operation.c_str();
+	info.lpFile = executable.c_str();
+	info.lpParameters = arguments.c_str();
+	info.lpDirectory = directory.empty() ? nullptr : directory.c_str();
+	info.nShow = show;
+	if (!ShellExecuteExW(&info)) return GetLastError();
+	if (process) *process = info.hProcess;
+	return ERROR_SUCCESS;
+}
 
 [[nodiscard]] inline std::optional<bool> IsCurrentProcessElevated() {
 	HANDLE token = nullptr;

@@ -1,5 +1,6 @@
 #include "_other/fishgram_update_transaction.h"
 #include "core/fishgram_client_gate_win.h"
+#include "core/fishgram_update_launch.h"
 
 #include <Windows.h>
 #include <Aclapi.h>
@@ -249,6 +250,7 @@ void TestCopyFailureRollsBackAllFiles() {
 		return CopyFileW(from.c_str(), to.c_str(), FALSE) != FALSE;
 	};
 	assert(Apply(request) == Result::CopyFailed);
+	assert(CanRestartAfterFailedUpdate(Result::CopyFailed, fixture.install.wstring()));
 	assert(Read(fixture.install / L"Telegram.exe") == "old-telegram");
 	assert(Read(fixture.install / L"Updater.exe") == "old-updater");
 	assert(!fs::exists(fixture.install / L"zlib.dll"));
@@ -558,8 +560,100 @@ void TestUnsafeInstallPermissionsCannotAuthorizeReplacement() {
 	assert(Apply(fixture.RequestFor(7002009001ULL)) == Result::WriteDenied);
 	assert(Read(fixture.install / L"Telegram.exe") == "old-telegram");
 	std::wstring runner;
-	assert(!PrepareUpdateRunner(fixture.install.wstring(), &runner));
+	Result failure = Result::IoError;
+	Core::FishGramUpdates::UpdateLaunch launch;
+	auto quitting = false;
+	auto reported = false;
+	assert(!launch.request([&] {
+		return PrepareUpdateRunner(fixture.install.wstring(), &runner, &failure);
+	}, [&] { quitting = true; }, [&] { reported = true; }));
+	assert(failure == Result::WriteDenied && !quitting && reported);
+	assert(fs::exists(fixture.work / L"tupdates" / L"temp" / L"ready"));
+	assert(!CanRestartAfterFailedUpdate(Result::WriteDenied, fixture.install.wstring()));
+	MakeTestPrivateDirectory(fixture.install);
+	assert(launch.request([&] {
+		return PrepareUpdateRunner(fixture.install.wstring(), &runner, &failure);
+	}, [&] { quitting = true; }, [] { assert(false); }));
+	assert(quitting && Read(runner) == "old-updater");
 	assert(InspectStartupRecovery(fixture.install.wstring()).state == StartupRecovery::State::None);
+}
+
+void TestRunnerBusyAndCopyFailureReasons() {
+	Fixture fixture(L"runner-errors-");
+	std::wstring runner;
+	assert(PrepareUpdateRunner(fixture.install.wstring(), &runner));
+	Result failure = Result::IoError;
+	{
+		Details::InstallLock lock;
+		assert(Details::AcquireLock((fixture.install / L".fishgram-update").wstring(), &lock, &failure));
+		assert(!PrepareUpdateRunner(fixture.install.wstring(), &runner, &failure));
+		assert(failure == Result::Busy);
+		assert(!CanRestartAfterFailedUpdate(Result::CopyFailed, fixture.install.wstring()));
+	}
+	const auto held = CreateFileW(runner.c_str(), GENERIC_READ, FILE_SHARE_READ,
+		nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+	assert(held != INVALID_HANDLE_VALUE);
+	assert(!PrepareUpdateRunner(fixture.install.wstring(), &runner, &failure));
+	assert(failure == Result::CopyFailed);
+	CloseHandle(held);
+	assert(PrepareUpdateRunner(fixture.install.wstring(), &runner, &failure));
+	assert(!PrepareUpdateRunner(L"relative-invalid-folder", &runner, &failure));
+	assert(failure == Result::InvalidInstallPath);
+	assert(DeleteFileW((fixture.install / L"Updater.exe").c_str()));
+	assert(!PrepareUpdateRunner(fixture.install.wstring(), &runner, &failure));
+	assert(failure == Result::InvalidPayload);
+}
+
+void TestFailedUpdateRestartRequiresCompleteSafeProgram() {
+	Fixture fixture(L"failed-restart-");
+	fixture.Payload(7002009001ULL);
+	std::wstring runner;
+	assert(PrepareUpdateRunner(fixture.install.wstring(), &runner));
+	// Authorization rejection happens before the transaction replaces any file.
+	auto rejected = fixture.RequestFor(7002009001ULL);
+	rejected.authorize = [] { return false; };
+	assert(Apply(rejected) == Result::InvalidPayload);
+	assert(CanRestartAfterFailedUpdate(Result::InvalidPayload, fixture.install.wstring()));
+	assert(!CanRestartAfterFailedUpdate(Result::InvalidPayload, fixture.install.wstring(), L"Updater.exe"));
+	assert(!CanRestartAfterFailedUpdate(Result::RecoveryFailed, fixture.install.wstring()));
+	{
+		ClientGate::Lease lease;
+		assert(ClientGate::TryAcquire(fixture.install.wstring(), false, &lease) == ClientGate::AcquireResult::Acquired);
+		assert(!CanRestartAfterFailedUpdate(Result::InvalidPayload, fixture.install.wstring()));
+	}
+	auto interrupted = fixture.RequestFor(7002009001ULL);
+	interrupted.afterReplace = [](std::size_t) { throw 42; };
+	try { (void)Apply(interrupted); assert(false); } catch (int code) { assert(code == 42); }
+	assert(!CanRestartAfterFailedUpdate(Result::CopyFailed, fixture.install.wstring()));
+	Result failure = Result::IoError;
+	assert(!PrepareUpdateRunner(fixture.install.wstring(), &runner, &failure));
+	assert(failure == Result::RecoveryFailed);
+	assert(RecoverPending(fixture.install.wstring()) == Result::Recovered);
+	assert(CanRestartAfterFailedUpdate(Result::CopyFailed, fixture.install.wstring()));
+	AllowEveryoneToWrite(fixture.install / L"Telegram.exe");
+	assert(!CanRestartAfterFailedUpdate(Result::InvalidPayload, fixture.install.wstring()));
+}
+
+void TestIncompleteRollbackDoesNotRestartClient() {
+	Fixture fixture(L"rollback-restart-");
+	fixture.Payload(7002009001ULL);
+	auto request = fixture.RequestFor(7002009001ULL);
+	request.copyFile = [](const std::wstring &from, const std::wstring &to) {
+		const auto path = fs::path(from);
+		if ((path.filename() == L"zlib.dll" && path.parent_path().filename() == L"temp")
+			|| (path.filename() == L"Telegram.exe" && path.parent_path().filename() == L"backup")) {
+			return false;
+		}
+		return CopyFileW(from.c_str(), to.c_str(), FALSE) != FALSE;
+	};
+	const auto result = Apply(request);
+	assert(result == Result::RecoveryFailed);
+	assert(!CanRestartAfterFailedUpdate(result, fixture.install.wstring()));
+	assert(fs::exists(fixture.install / L".fishgram-update" / L"pending" / L"journal.bin"));
+	assert(Read(fixture.install / L"Telegram.exe") == "new-telegram");
+	assert(RecoverPending(fixture.install.wstring()) == Result::Recovered);
+	assert(Read(fixture.install / L"Telegram.exe") == "old-telegram");
+	assert(CanRestartAfterFailedUpdate(Result::CopyFailed, fixture.install.wstring()));
 }
 
 void TestExplicitlySharedProgramCannotBecomeRecoveryRunner() {
@@ -697,6 +791,9 @@ int wmain(int argc, wchar_t **argv) {
 	TestRetainsCurrentAndTwoPriorVersions();
 	TestCommittedRecoveryAlsoTrimsProgramHistory();
 	TestUnsafeInstallPermissionsCannotAuthorizeReplacement();
+	TestRunnerBusyAndCopyFailureReasons();
+	TestFailedUpdateRestartRequiresCompleteSafeProgram();
+	TestIncompleteRollbackDoesNotRestartClient();
 	TestExplicitlySharedProgramCannotBecomeRecoveryRunner();
 	TestRecoveryRejectsSharedMetadataAndBackup();
 	TestElevatedPolicyExcludesTheOrdinaryUserWriter();

@@ -1406,19 +1406,35 @@ inline void AppendText(
 }
 
 [[nodiscard]] inline bool PrepareUpdateRunner(
-		const std::wstring &inputInstallDir, std::wstring *updaterPath) {
+		const std::wstring &inputInstallDir,
+		std::wstring *updaterPath,
+		Result *failure = nullptr) {
 	using namespace Details;
+	const auto fail = [&](Result error) {
+		if (failure) *failure = error;
+		return false;
+	};
 	std::wstring installDir, meta, versions;
-	if (!CanonicalDirectory(inputInstallDir, &installDir)) return false;
+	if (!CanonicalDirectory(inputInstallDir, &installDir)) return fail(Result::InvalidInstallPath);
 	DirectoryGuard guard;
-	if (!HoldDirectoryPath(installDir, &guard) || !PrepareMetadata(installDir, &meta, &versions)) return false;
+	if (!HoldDirectoryPath(installDir, &guard) || !PrepareMetadata(installDir, &meta, &versions)) {
+		return fail(Result::WriteDenied);
+	}
 	InstallLock lock;
-	Result failure = Result::IoError;
-	if (!AcquireLock(meta, &lock, &failure) || !IsAbsent(Join(meta, L"pending"))) return false;
+	Result lockFailure = Result::IoError;
+	if (!AcquireLock(meta, &lock, &lockFailure)) return fail(lockFailure);
+	if (!IsAbsent(Join(meta, L"pending"))) return fail(Result::RecoveryFailed);
 	const auto source = Join(installDir, L"Updater.exe");
 	const auto held = CreateFileW(source.c_str(), GENERIC_READ, FILE_SHARE_READ,
 		nullptr, OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
-	if (held == INVALID_HANDLE_VALUE) return false;
+	if (held == INVALID_HANDLE_VALUE) {
+		const auto error = GetLastError();
+		if (error == ERROR_FILE_NOT_FOUND || error == ERROR_PATH_NOT_FOUND) {
+			return fail(Result::InvalidPayload);
+		}
+		return fail((error == ERROR_SHARING_VIOLATION || error == ERROR_LOCK_VIOLATION)
+			? Result::FileInUse : Result::WriteDenied);
+	}
 	BY_HANDLE_FILE_INFORMATION info = {};
 	const auto valid = GetFileInformationByHandle(held, &info)
 		&& !(info.dwFileAttributes & (FILE_ATTRIBUTE_REPARSE_POINT | FILE_ATTRIBUTE_DIRECTORY));
@@ -1430,8 +1446,41 @@ inline void AppendText(
 		&& CopyDurable(Request(), source, next, true)
 		&& MoveFileExW(next.c_str(), target.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH);
 	CloseHandle(held);
-	if (prepared) *updaterPath = target;
-	return prepared;
+	if (!prepared) return fail(valid ? Result::CopyFailed : Result::InvalidInstallPath);
+	*updaterPath = target;
+	return true;
+}
+
+// Ordinary failures leave the old program untouched or finish rollback.
+// A pending journal, an unsafe program tree or another installation user must
+// be handled before reopening the client, even if the original error was minor.
+[[nodiscard]] inline bool CanRestartAfterFailedUpdate(
+		Result result,
+		const std::wstring &inputInstallDir,
+		const std::wstring &executableName = L"Telegram.exe") {
+	using namespace Details;
+	if (!SameName(executableName, L"Telegram.exe")
+		|| result == Result::RecoveryFailed || result == Result::Busy
+		|| result == Result::AppRunning || result == Result::InvalidInstallPath) {
+		return false;
+	}
+	std::wstring installDir;
+	if (!CanonicalDirectory(inputInstallDir, &installDir)) return false;
+	DirectoryGuard guard;
+	if (!HoldDirectoryPath(installDir, &guard) || !TrustedProgramBoundary(installDir)) return false;
+	const auto meta = Join(installDir, L".fishgram-update");
+	if (!TrustedMetadataTree(meta)) return false;
+	InstallLock lock;
+	Result failure = Result::IoError;
+	if (!AcquireLock(meta, &lock, &failure) || !IsAbsent(Join(meta, L"pending"))) return false;
+	Core::FishGramClientGate::Lease clientGate;
+	if (Core::FishGramClientGate::TryAcquire(installDir, true, &clientGate)
+		!= Core::FishGramClientGate::AcquireResult::Acquired) return false;
+	const auto executable = Join(installDir, L"Telegram.exe");
+	DWORD attributes = 0;
+	return Attributes(executable, &attributes)
+		&& !(attributes & (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT))
+		&& !TargetProcessRunning(executable);
 }
 
 } // namespace Core::FishGramUpdates::WindowsTransaction

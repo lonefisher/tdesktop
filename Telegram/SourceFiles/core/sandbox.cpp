@@ -458,7 +458,10 @@ void Sandbox::socketError(QLocalSocket::LocalSocketError e) {
 		&& Core::checkReadyUpdate()) {
 		cSetRestartingUpdate(true);
 		DEBUG_LOG(("Sandbox Info: installing update instead of starting app..."));
-		return Quit();
+		Quit();
+		if (Quitting()) {
+			return;
+		}
 	}
 
 	if (cQuit()) {

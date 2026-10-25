@@ -11,6 +11,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "core/update_checker.h"
 #include "core/update_channel.h"
 #include "_other/fishgram_update_transaction.h"
+#include "_other/fishgram_update_restart.h"
 
 #include <windows.h>
 #include <shellapi.h>
@@ -18,9 +19,39 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 #include <crtdbg.h>
 #include <cstdlib>
+#include <QtWidgets/QApplication>
+#include <QtWidgets/QWidget>
 
 namespace Platform {
 namespace {
+
+HWND UpdateOwnerWindow() {
+	if (const auto owner = GetActiveWindow()) return owner;
+	if (const auto window = QApplication::activeWindow()) {
+		return reinterpret_cast<HWND>(window->winId());
+	}
+	return nullptr;
+}
+
+QString UpdateRunnerError(Core::FishGramUpdates::WindowsTransaction::Result error) {
+	using Core::FishGramUpdates::WindowsTransaction::Result;
+	switch (error) {
+	case Result::InvalidInstallPath:
+		return u"The FishGram installation folder is invalid."_q;
+	case Result::WriteDenied:
+		return u"The installation or update files failed permission and safety checks. Use a private writable installation folder."_q;
+	case Result::Busy:
+		return u"Another updater is using this installation. Close it and retry."_q;
+	case Result::RecoveryFailed:
+		return u"An interrupted update needs recovery before another update can start."_q;
+	case Result::FileInUse:
+		return u"The installed updater is in use. Close the other updater and retry."_q;
+	case Result::CopyFailed:
+		return u"The update program could not be copied. Check free space and file access, then retry."_q;
+	default:
+		return u"The installed update program could not be prepared. Check the installation files and retry."_q;
+	}
+}
 
 // Turn a CRT/STL assertion (or pure-virtual / invalid-parameter) into a real,
 // crash-reported failure instead of a modal Abort/Retry/Ignore dialog that
@@ -186,6 +217,7 @@ std::optional<QStringList> Launcher::readArgumentsHook(
 }
 
 bool Launcher::launchUpdater(UpdaterLaunch action) {
+	_updateLaunchError = u"The FishGram executable name is unavailable."_q;
 	if (cExeName().isEmpty()) {
 		return false;
 	}
@@ -197,9 +229,17 @@ bool Launcher::launchUpdater(UpdaterLaunch action) {
 			: QString());
 	auto binaryPath = cExeDir() + cExeName();
 	if (action != UpdaterLaunch::JustRelaunch) {
+		if (!Core::checkReadyUpdate()) {
+			_updateLaunchError = u"The downloaded update is no longer ready. Check for updates and retry."_q;
+			return false;
+		}
 		std::wstring runner;
+		auto failure = Core::FishGramUpdates::WindowsTransaction::Result::IoError;
 		if (!Core::FishGramUpdates::WindowsTransaction::PrepareUpdateRunner(
-			QDir::toNativeSeparators(cExeDir()).toStdWString(), &runner)) return false;
+			QDir::toNativeSeparators(cExeDir()).toStdWString(), &runner, &failure)) {
+			_updateLaunchError = UpdateRunnerError(failure);
+			return false;
+		}
 		// Never execute an unauthenticated binary from the work directory.
 		binaryPath = QString::fromStdWString(runner);
 	}
@@ -247,13 +287,23 @@ bool Launcher::launchUpdater(UpdaterLaunch action) {
 			pushArgument('"' + cExeDir() + '"');
 		}
 	}
-	return launch(operation, binaryPath, argumentsList);
+	return launch(operation, binaryPath, argumentsList,
+		action == UpdaterLaunch::PerformUpdate);
+}
+
+void Launcher::showUpdateLaunchError() {
+	LOG(("Update Error: %1").arg(_updateLaunchError));
+	const auto message = (_updateLaunchError
+		+ u"\n\nFishGram will continue running the current version."_q).toStdWString();
+	MessageBoxW(UpdateOwnerWindow(), message.c_str(),
+		L"FishGram update", MB_OK | MB_ICONWARNING);
 }
 
 bool Launcher::launch(
 		const QString &operation,
 		const QString &binaryPath,
-		const QStringList &argumentsList) {
+		const QStringList &argumentsList,
+		bool keepRunning) {
 	const auto convertPath = [](const QString &path) {
 		return QDir::toNativeSeparators(path).toStdWString();
 	};
@@ -266,23 +316,18 @@ bool Launcher::launch(
 		).arg(arguments
 		));
 
-	Logs::closeMain();
-	CrashReports::Finish();
+	if (!keepRunning) {
+		Logs::closeMain();
+		CrashReports::Finish();
+	}
 
-	const auto hwnd = HWND(0);
-	const auto result = ShellExecute(
-		hwnd,
-		operation.isEmpty() ? nullptr : operation.toStdWString().c_str(),
-		nativeBinaryPath.c_str(),
-		arguments.toStdWString().c_str(),
-		nativeWorkingDir.empty() ? nullptr : nativeWorkingDir.c_str(),
-		SW_SHOWNORMAL);
-	if (int64(result) < 32) {
-		DEBUG_LOG(("Application Error: failed to execute %1, working directory: '%2', result: %3"
-			).arg(binaryPath
-			).arg(cWorkingDir()
-			).arg(int64(result)
-			));
+	const auto error = Core::FishGramUpdates::LaunchUpdateProcess(
+		UpdateOwnerWindow(), operation.toStdWString(), nativeBinaryPath,
+		arguments.toStdWString(), nativeWorkingDir);
+	if (error != ERROR_SUCCESS) {
+		_updateLaunchError = (error == ERROR_CANCELLED)
+			? u"Starting the update was cancelled."_q
+			: u"Windows could not start the update program (error %1). Check file access and retry."_q.arg(error);
 		return false;
 	}
 	return true;
