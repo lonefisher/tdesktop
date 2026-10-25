@@ -405,10 +405,12 @@ int Launcher::exec() {
 	DEBUG_LOG(("Telegram finished, result: %1").arg(result));
 
 	if (!UpdaterDisabled() && cRestartingUpdate()) {
+#ifndef Q_OS_WIN
 		DEBUG_LOG(("Sandbox Info: executing updater to install update."));
 		if (!launchUpdater(UpdaterLaunch::PerformUpdate)) {
 			base::Platform::DeleteDirectory(cWorkingDir() + u"tupdates/temp"_q);
 		}
+#endif // !Q_OS_WIN
 	} else if (cRestarting()) {
 		DEBUG_LOG(("Sandbox Info: executing Telegram because of restart."));
 		launchUpdater(UpdaterLaunch::JustRelaunch);
@@ -420,6 +422,16 @@ int Launcher::exec() {
 	Logs::finish();
 
 	return result;
+}
+
+bool Launcher::quitForUpdate(Fn<void()> quit) {
+	return _updateLaunch.request(
+		[&] { return launchUpdater(UpdaterLaunch::PerformUpdate); },
+		[&] { quit(); },
+		[&] {
+			cSetRestartingUpdate(false);
+			showUpdateLaunchError();
+		});
 }
 
 bool Launcher::validateCustomWorkingDir() {

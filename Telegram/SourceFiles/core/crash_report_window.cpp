@@ -976,6 +976,10 @@ void LastCrashedWindow::setUpdatingState(UpdatingState state, bool force) {
 			if (Core::checkReadyUpdate()) {
 				cSetRestartingUpdate(true);
 				Core::Quit();
+				if (Core::Quitting()) {
+					return;
+				}
+				setUpdatingState(UpdatingFail);
 				return;
 			} else {
 				setUpdatingState(UpdatingFail);

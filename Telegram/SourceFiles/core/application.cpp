@@ -2153,9 +2153,17 @@ void Quit(QuitReason reason) {
    } else if (IsAppLaunched() && App().preventsQuit(reason)) {
 	   return;
    }
-   SetLaunchState(LaunchState::QuitRequested);
-
-   QuitAttempt();
+   const auto quit = [] {
+	   SetLaunchState(LaunchState::QuitRequested);
+	   QuitAttempt();
+   };
+#ifdef Q_OS_WIN
+   if (!UpdaterDisabled() && cRestartingUpdate()) {
+	   Launcher::Instance().quitForUpdate(quit);
+	   return;
+   }
+#endif // Q_OS_WIN
+   quit();
 }
 
 bool Quitting() {
@@ -2174,6 +2182,11 @@ void Restart() {
    const auto updateReady = !UpdaterDisabled()
 	   && (UpdateChecker().state() == UpdateChecker::State::Ready);
    if (updateReady) {
+#ifndef Q_OS_WIN
+	   if (!checkReadyUpdate()) {
+		   return;
+	   }
+#endif // !Q_OS_WIN
 	   cSetRestartingUpdate(true);
    } else {
 	   cSetRestarting(true);

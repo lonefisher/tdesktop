@@ -331,7 +331,6 @@ void Widget::checkUpdateStatus() {
 		const auto stepHasCover = getStep()->hasCover();
 		_update->toggle(!stepHasCover, anim::type::instant);
 		_update->entity()->setClickedCallback([] {
-			Core::checkReadyUpdate();
 			Core::Restart();
 		});
 	} else {

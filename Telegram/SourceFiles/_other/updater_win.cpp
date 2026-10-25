@@ -49,7 +49,7 @@ void updateError(const WCHAR *msg, DWORD errorCode) {
 		: L"(Unknown error)";
 	wsprintf(errMsg, L"%s, error code: %d\nError message: %s", msg, errorCode, errorText);
 
-	MessageBox(0, errMsg, L"Update error!", MB_ICONERROR);
+	MessageBox(GetActiveWindow(), errMsg, L"FishGram update", MB_OK | MB_ICONERROR);
 
 	LocalFree(errorTextFormatted);
 }
@@ -152,19 +152,19 @@ const WCHAR *updateResultMessage(FishGramTransaction::Result result) {
 	return L"The update failed safely.";
 }
 
-bool update() {
+FishGramTransaction::Result update(std::wstring *errorMessage) {
 	writeLog(L"Transactional update started.");
 	if (updateTo.empty()) {
-		updateError(L"No installation folder was provided.", ERROR_INVALID_PARAMETER);
-		return false;
+		*errorMessage = L"No installation folder was provided.";
+		return FishGramTransaction::Result::InvalidInstallPath;
 	}
 	wstring workDir = customWorkingDir;
 	if (workDir.empty()) {
 		WCHAR currentDirectory[32768] = {};
 		const auto length = GetCurrentDirectoryW(DWORD(std::size(currentDirectory)), currentDirectory);
 		if (!length || length >= std::size(currentDirectory)) {
-			updateError(L"Failed to determine the update work folder", GetLastError());
-			return false;
+			*errorMessage = L"Failed to determine the update work folder.";
+			return FishGramTransaction::Result::InvalidWorkPath;
 		}
 		workDir = currentDirectory;
 	}
@@ -189,8 +189,8 @@ bool update() {
 		read(FishGramTransaction::Details::Join(updateTo, L".fishgram-update\\held-trust"), 1024 * 1024), root);
 	if (!embedded || !held || held->version < embedded->version
 		|| (held->version == embedded->version && held->bytes != embedded->bytes)) {
-		updateError(L"The FishGram signing-key authorization is missing or invalid.", ERROR_INVALID_DATA);
-		return false;
+		*errorMessage = L"The FishGram signing-key authorization is missing or invalid.";
+		return FishGramTransaction::Result::InvalidPayload;
 	}
 	const auto running = fromVersion > ownVersion ? fromVersion : ownVersion;
 	const auto packageBytes = read(FishGramTransaction::Details::Join(workDir, L"tupdates\\package.v2"), Core::Updates::kMaxPayloadSize);
@@ -201,8 +201,8 @@ bool update() {
 		held, root, QDateTime::currentSecsSinceEpoch());
 	const auto payload = verified ? Core::FishGramUpdates::DecodeVerifiedPayload(*verified) : std::nullopt;
 	if (!payload) {
-		updateError(L"The update failed FishGram signature, version, platform or payload validation.", ERROR_INVALID_DATA);
-		return false;
+		*errorMessage = L"The update failed FishGram signature, version, platform or payload validation.";
+		return FishGramTransaction::Result::InvalidPayload;
 	}
 	request.runningVersion = payload->version;
 	request.signedChannel = std::uint32_t(payload->channel);
@@ -232,12 +232,11 @@ bool update() {
 	}
 	const auto result = FishGramTransaction::Apply(request);
 	writeLog(L"Transactional update result: " + std::to_wstring(int(result)));
-	if (result == FishGramTransaction::Result::Applied
-		|| result == FishGramTransaction::Result::NoUpdate) {
-		return true;
+	if (result != FishGramTransaction::Result::Applied
+		&& result != FishGramTransaction::Result::NoUpdate) {
+		*errorMessage = updateResultMessage(result);
 	}
-	updateError(updateResultMessage(result), DWORD(result));
-	return false;
+	return result;
 }
 
 bool launchUnelevated(const wstring &executable, const wstring &arguments) {
@@ -304,6 +303,8 @@ int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE prevInstance, LPWSTR cmdPara
 	int argsCount;
 
 	bool needupdate = false, needrecover = false, autostart = false, debug = false, writeprotected = false, startintray = false;
+	bool updateFailed = false;
+	auto failedResult = FishGramTransaction::Result::InvalidPayload;
 	DWORD waitPid = 0;
 	args = CommandLineToArgvW(GetCommandLine(), &argsCount);
 	if (args) {
@@ -389,8 +390,12 @@ int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE prevInstance, LPWSTR cmdPara
 								&& equal(parentPath, FishGramTransaction::Details::Join(updateTo, L"Telegram.exe"));
 							const auto exited = valid && WaitForSingleObject(parent, 60000) == WAIT_OBJECT_0;
 							CloseHandle(parent);
-							if (!exited) { LocalFree(args); closeLog(); return 1; }
+							if (!exited) {
+								updateError(L"The updater could not confirm that the previous FishGram process exited. Close it before retrying.", ERROR_TIMEOUT);
+								LocalFree(args); closeLog(); return 1;
+							}
 						} else if (GetLastError() != ERROR_INVALID_PARAMETER) {
+							updateError(L"The updater could not check the previous FishGram process. Close it before retrying.", GetLastError());
 							LocalFree(args); closeLog(); return 1;
 						}
 					}
@@ -403,7 +408,20 @@ int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE prevInstance, LPWSTR cmdPara
 						LocalFree(args); closeLog(); return 1;
 					}
 				} else if (needupdate) {
-					if (!update()) { closeLog(); return 1; }
+					std::wstring errorMessage;
+					const auto result = update(&errorMessage);
+					if (result != FishGramTransaction::Result::Applied
+						&& result != FishGramTransaction::Result::NoUpdate) {
+						const auto canRestart = FishGramTransaction::CanRestartAfterFailedUpdate(result, updateTo, exeName);
+						errorMessage += canRestart
+							? L"\n\nFishGram will restart the previous version."
+							: L"\n\nFishGram cannot restart safely. Close other FishGram and updater processes and resolve the installation permissions or program recovery problem before starting it again.";
+						MessageBoxW(GetActiveWindow(), errorMessage.c_str(),
+							L"FishGram update", MB_OK | MB_ICONWARNING);
+						if (!canRestart) { LocalFree(args); closeLog(); return 1; }
+						updateFailed = true;
+						failedResult = result;
+					}
 				}
 
 			} else {
@@ -429,13 +447,21 @@ int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE prevInstance, LPWSTR cmdPara
 	}
 	writeLog(L"Result arguments: " + targs);
 
+	// The error dialog can stay open while another installation operation starts.
+	if (updateFailed && !FishGramTransaction::CanRestartAfterFailedUpdate(failedResult, updateTo, exeName)) {
+		MessageBoxW(GetActiveWindow(),
+			L"The installation changed while the update error was displayed. Close other FishGram and updater processes and resolve program recovery before starting FishGram again.",
+			L"FishGram update", MB_OK | MB_ICONWARNING);
+		closeLog(); return 1;
+	}
+
 	const auto executed = Core::FishGramUpdates::RestartUpdatedClient(
 		writeprotected, Core::FishGramUpdates::IsCurrentProcessElevated(),
 		[&] { return launchUnelevated(FishGramTransaction::Details::Join(updateTo, exeName), L"-noupdate" + targs); },
 		[&] {
-			return reinterpret_cast<INT_PTR>(ShellExecuteW(0, 0,
-				FishGramTransaction::Details::Join(updateTo, exeName).c_str(),
-				(L"-noupdate" + targs).c_str(), 0, SW_SHOWNORMAL)) > 32;
+			return Core::FishGramUpdates::LaunchUpdateProcess(GetActiveWindow(), {},
+				FishGramTransaction::Details::Join(updateTo, exeName),
+				L"-noupdate" + targs, {}) == ERROR_SUCCESS;
 		});
 	if (!executed) {
 		updateError(L"The updater could not restart FishGram as a normal user. Close this updater and start FishGram from your normal desktop.", ERROR_ELEVATION_REQUIRED);
@@ -445,7 +471,7 @@ int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE prevInstance, LPWSTR cmdPara
 	writeLog(L"Executed '" + exeName + L"', closing log and quitting..");
 	closeLog();
 
-	return 0;
+	return updateFailed ? 1 : 0;
 }
 
 static const WCHAR *_programName = L"FishGram"; // folder in APPDATA, if current path is unavailable for writing
