@@ -717,8 +717,17 @@ void HttpChecker::request(Request step) {
     const auto url = QUrl(QStringLiteral("https://lonefisher.github.io/fishgram/") + suffix);
     auto networkRequest = QNetworkRequest(url);
     networkRequest.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::NoLessSafeRedirectPolicy);
+    networkRequest.setAttribute(QNetworkRequest::Http2AllowedAttribute, false);
     _manager = std::make_unique<QNetworkAccessManager>();
     _reply = _manager->get(networkRequest);
+    _reply->setReadBufferSize(kMaxResponseSize);
+    _reply->connect(_reply, &QNetworkReply::readyRead, [=, queued = false]() mutable {
+        if (!_reply || queued || _reply->bytesAvailable() < kMaxResponseSize) {
+            return;
+        }
+        queued = true;
+        crl::on_main(this, [=] { gotResponse(); });
+    });
     _reply->connect(_reply, &QNetworkReply::finished, [=] { gotResponse(); });
     _reply->connect(_reply, &QNetworkReply::errorOccurred, [=](auto e) { gotFailure(e); });
 }
@@ -741,7 +750,11 @@ void HttpChecker::gotResponse() {
         fail(UpdateFailure::Network);
         return;
     }
-    const auto response = _reply->readAll();
+    const auto weak = base::make_weak(this);
+    const auto response = _reply->read(kMaxResponseSize);
+    if (!weak) {
+        return;
+    }
     clearSentRequest();
     if (response.size() >= kMaxResponseSize) {
         fail(FailureForInvalidResponse(_request == Request::Feed
@@ -797,11 +810,13 @@ void HttpChecker::clearSentRequest() {
 	if (!reply) {
 		return;
 	}
+	reply->disconnect(reply, &QNetworkReply::readyRead, nullptr, nullptr);
 	reply->disconnect(reply, &QNetworkReply::finished, nullptr, nullptr);
 	reply->disconnect(reply, &QNetworkReply::errorOccurred, nullptr, nullptr);
 	reply->abort();
+	reply->disconnect();
 	reply->deleteLater();
-	_manager = nullptr;
+	_manager.release()->deleteLater();
 }
 
 HttpChecker::~HttpChecker() {
@@ -815,7 +830,11 @@ void HttpChecker::gotFailure(QNetworkReply::NetworkError e) {
 		? _reply->attribute(QNetworkRequest::HttpStatusCodeAttribute)
 		: QVariant();
 	if (const auto reply = base::take(_reply)) {
+		reply->disconnect(reply, &QNetworkReply::readyRead, nullptr, nullptr);
+		reply->disconnect(reply, &QNetworkReply::finished, nullptr, nullptr);
+		reply->disconnect(reply, &QNetworkReply::errorOccurred, nullptr, nullptr);
 		reply->deleteLater();
+		_manager.release()->deleteLater();
 	}
 	if (status.isValid() && status.toInt() != 200) {
 		fail(UpdateFailure::Network);
