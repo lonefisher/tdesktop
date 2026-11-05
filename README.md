@@ -7,7 +7,8 @@ in the [FishGram product repository](https://github.com/lonefisher/fishgram).
 Development and upstream upgrades follow the product repository's
 [maintenance guide](https://github.com/lonefisher/fishgram/blob/main/docs/UPDATING.md).
 
-The current source targets FishGram 7.3.3-r10 Beta with Qt 6.11.2.
+The current source targets the FishGram 7.3.5-r12 Beta candidate with Qt 6.11.2.
+Full Windows build and product-candidate validation remain pending.
 The [Beta release scope](https://github.com/lonefisher/fishgram/blob/main/docs/BETA-RELEASE.md)
 records the accepted search limitations and the required cloud candidate,
 signed update, and recovery checks. Downloads and verification results are
