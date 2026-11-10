@@ -47,7 +47,7 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           repository: lonefisher/fishgram
-          ref: 0bb8a013b460383a05d92253459c9d06141ec7cd
+          ref: 5345fdaa01d17fb5cfef48dd0e8234f24fc7a863
           path: product
           persist-credentials: false
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
