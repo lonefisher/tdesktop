@@ -7,8 +7,9 @@ in the [FishGram product repository](https://github.com/lonefisher/fishgram).
 Development and upstream upgrades follow the product repository's
 [maintenance guide](https://github.com/lonefisher/fishgram/blob/main/docs/UPDATING.md).
 
-The current source targets the FishGram 7.3.5-r12 Beta candidate with Qt 6.11.2.
-Full Windows build and product-candidate validation remain pending.
+The current source targets the FishGram 7.4.1-r13 Beta candidate with Qt 6.11.2.
+Full Windows build, product-candidate validation, and license clearance for the
+new widget-sandbox dependency remain pending. This is not a published release.
 The [Beta release scope](https://github.com/lonefisher/fishgram/blob/main/docs/BETA-RELEASE.md)
 records the accepted search limitations and the required cloud candidate,
 signed update, and recovery checks. Downloads and verification results are
@@ -85,6 +86,10 @@ Version **1.8.15** was the last that supports older systems
 * Hunspell ([LGPL](https://github.com/hunspell/hunspell/blob/master/COPYING.LESSER))
 * Ada ([Apache License 2.0](https://github.com/ada-url/ada/blob/main/LICENSE-APACHE))
 * zxcvbn-c ([MIT License](https://github.com/tsyrogit/zxcvbn-c/blob/master/LICENSE.txt))
+* twidget ([BSD 3-Clause License](https://github.com/TelegramMessenger/twidget/blob/main/LICENSE))
+* litehtml ([BSD 3-Clause License](https://github.com/litehtml/litehtml/blob/master/LICENSE))
+* Gumbo ([Apache License 2.0](https://github.com/google/gumbo-parser/blob/master/COPYING))
+* QuickJS-ng ([MIT License](https://github.com/quickjs-ng/quickjs/blob/master/LICENSE))
 * FrequencyWords by Hermit Dave ([Creative Commons Attribution-ShareAlike 4.0](https://creativecommons.org/licenses/by-sa/4.0/))
 
 ## Build instructions
