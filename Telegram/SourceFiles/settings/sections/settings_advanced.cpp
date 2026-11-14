@@ -25,7 +25,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "core/launcher.h"
 #include "core/update_channel.h"
 #include "core/update_checker.h"
-#include "core/update_failure.h"
 #include "data/data_auto_download.h"
 #include "data/data_session.h"
 #include "export/export_manager.h"
@@ -87,32 +86,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 namespace Settings {
 namespace {
-
-[[nodiscard]] QString UpdateFailureText(Core::UpdateFailure failure) {
-	switch (failure) {
-	case Core::UpdateFailure::NotConfigured:
-		return tr::lng_settings_update_error_not_configured(tr::now);
-	case Core::UpdateFailure::Network:
-		return tr::lng_settings_update_error_network(tr::now);
-	case Core::UpdateFailure::Timeout:
-		return tr::lng_settings_update_error_timeout(tr::now);
-	case Core::UpdateFailure::Manifest:
-		return tr::lng_settings_update_error_manifest(tr::now);
-	case Core::UpdateFailure::Index:
-		return tr::lng_settings_update_error_index(tr::now);
-	case Core::UpdateFailure::Signature:
-		return tr::lng_settings_update_error_signature(tr::now);
-	case Core::UpdateFailure::Download:
-		return tr::lng_settings_update_error_download(tr::now);
-	case Core::UpdateFailure::DownloadValidation:
-		return tr::lng_settings_update_error_validation(tr::now);
-	case Core::UpdateFailure::Staging:
-		return tr::lng_settings_update_error_staging(tr::now);
-	case Core::UpdateFailure::None:
-		return tr::lng_settings_update_fail(tr::now);
-	}
-	return tr::lng_settings_update_fail(tr::now);
-}
 
 using namespace Builder;
 
@@ -1105,11 +1078,6 @@ void SetDefaultStatus(
 		not_null<Ui::SettingsButton*> update,
 		const QString &version) {
 	using State = Core::UpdateChecker::State;
-	const auto failure = checker.failureReason();
-	if (failure != Core::UpdateFailure::None) {
-		texts->fire(UpdateFailureText(failure));
-		return;
-	}
 	const auto state = checker.state();
 	switch (state) {
 	case State::Download:
@@ -1157,7 +1125,7 @@ void SubscribeToUpdateChecker(
 	}, options->lifetime());
 	checker.failed() | rpl::on_next([=] {
 		options->setAttribute(Qt::WA_TransparentForMouseEvents, false);
-		texts->fire(UpdateFailureText(checker.failureReason()));
+		texts->fire(tr::lng_settings_update_fail(tr::now));
 		downloading->fire(false);
 	}, options->lifetime());
 	checker.ready() | rpl::on_next([=] {
@@ -1266,7 +1234,7 @@ void BuildUpdateSection(SectionBuilder &builder, bool atTop) {
 	if (check && container) {
 		const auto update = Ui::CreateChild<Ui::SettingsButton>(
 			check,
-			tr::lng_fishgram_update(),
+			tr::lng_update_telegram(),
 			st::settingsUpdate);
 		update->hide();
 		check->widthValue() | rpl::on_next([=](int width) {
@@ -1310,6 +1278,9 @@ void BuildUpdateSection(SectionBuilder &builder, bool atTop) {
 		SetDefaultStatus(checker, texts, downloading, update, version);
 
 		update->setClickedCallback([] {
+			if (!Core::UpdaterDisabled()) {
+				Core::checkReadyUpdate();
+			}
 			Core::Restart();
 		});
 	}
@@ -1530,7 +1501,7 @@ void SetupUpdate(not_null<Ui::VerticalLayout*> container) {
 		st::settingsButtonNoIcon));
 	const auto update = Ui::CreateChild<Button>(
 		check,
-		tr::lng_fishgram_update(),
+		tr::lng_update_telegram(),
 		st::settingsUpdate);
 	update->hide();
 	check->widthValue() | rpl::on_next([=](int width) {
@@ -1602,6 +1573,9 @@ void SetupUpdate(not_null<Ui::VerticalLayout*> container) {
 		checker.start();
 	});
 	update->addClickHandler([] {
+		if (!Core::UpdaterDisabled()) {
+			Core::checkReadyUpdate();
+		}
 		Core::Restart();
 	});
 }

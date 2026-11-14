@@ -1,4 +1,4 @@
-name: FishGram source checks
+name: Fishgram source checks
 on:
   pull_request:
   push:
@@ -33,8 +33,6 @@ jobs:
         run: |
           ./product/tools/test-restricted-search.ps1 -SourceRoot "$PWD/source" -OutputDirectory "$PWD/build-tests"
           ./product/tools/test-restricted-search-integration.ps1 -SourceRoot "$PWD/source" -OutputDirectory "$PWD/build-search-integration-tests"
-          ./product/tools/test-update-policy.ps1 -SourceRoot "$PWD/source"
-          ./product/tools/test-update-transaction.ps1 -SourceRoot "$PWD/source"
           python -m unittest discover -s product/tests -p test_data_recovery.py -v
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
   compile:
@@ -82,14 +80,10 @@ jobs:
         shell: pwsh
         working-directory: product
         run: ./tools/prepare-dependencies.ps1 -Silent
-      - name: Verify production update packages with disposable test keys
-        shell: pwsh
-        working-directory: product
-        run: ./tools/test-update-verify.ps1
       - name: Compile test identity, never upload client or raw logs
         shell: pwsh
         working-directory: product
-        run: ./tools/build-telegram.ps1 -TestIdentity -TestUpdateSystem -Parallel 4
+        run: ./tools/build-telegram.ps1 -TestIdentity -Parallel 4
       - name: Sanitized build diagnostics only
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02

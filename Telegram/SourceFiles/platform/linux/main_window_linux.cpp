@@ -420,7 +420,7 @@ void MainWindow::createGlobalMenu() {
 		tr::lng_mac_menu_about_telegram(
 			tr::now,
 			lt_telegram,
-			u"FishGram"_q),
+			u"Fishgram"_q),
 		[=] {
 			ensureWindowShown();
 			controller().show(Box(AboutBox));

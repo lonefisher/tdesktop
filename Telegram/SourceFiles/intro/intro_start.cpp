@@ -24,7 +24,7 @@ StartWidget::StartWidget(
 	not_null<Data*> data)
 : Step(parent, account, data, true) {
 	setMouseTracking(true);
-	setTitleText(rpl::single(u"FishGram"_q));
+	setTitleText(rpl::single(u"Fishgram"_q));
 	setDescriptionText(tr::lng_fishgram_intro_about());
 	show();
 }

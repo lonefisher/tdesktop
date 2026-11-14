@@ -8,7 +8,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #pragma once
 
 #include "mtproto/dedicated_file_loader.h"
-#include "core/update_failure.h"
 
 namespace Main {
 class Session;
@@ -36,7 +35,6 @@ public:
 	rpl::producer<> isLatest() const;
 	rpl::producer<Progress> progress() const;
 	rpl::producer<> failed() const;
-	UpdateFailure failureReason() const;
 	rpl::producer<> ready() const;
 
 	void start(bool forceWait = false);

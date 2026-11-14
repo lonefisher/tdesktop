@@ -1,19 +1,19 @@
-# FishGram source
+# Fishgram source
 
-FishGram is an unofficial Telegram Desktop customization based on the Telegram API.
+Fishgram is an unofficial Telegram Desktop customization based on the Telegram API.
 The initial supported target is Windows 11 x64 portable. This repository contains
 the source fork; build recipes, maintenance instructions and release records live
-in the [FishGram product repository](https://github.com/lonefisher/fishgram).
+in the [Fishgram product repository](https://github.com/lonefisher/fishgram).
 Development and upstream upgrades follow the product repository's
 [maintenance guide](https://github.com/lonefisher/fishgram/blob/main/docs/UPDATING.md).
 
-The current source targets the FishGram 7.4.1-r13 Beta candidate with Qt 6.11.2.
+The current source targets Fishgram 7.4.4-r14 with Qt 6.11.2.
+There is no in-app updater. Installs and updates go through Scoop.
 Full Windows build, product-candidate validation, and license clearance for the
 new widget-sandbox dependency remain pending. This is not a published release.
 The [Beta release scope](https://github.com/lonefisher/fishgram/blob/main/docs/BETA-RELEASE.md)
-records the accepted search limitations and the required cloud candidate,
-signed update, and recovery checks. Downloads and verification results are
-published in the product repository.
+records the accepted search limitations and the required cloud candidate checks.
+Downloads and verification results are published in the product repository.
 
 The upstream instructions and licenses below are retained for reference.
 

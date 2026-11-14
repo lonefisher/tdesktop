@@ -426,7 +426,7 @@ void Manager::buildAppleMenu(QMenu *main) {
 			});
 		};
 		_about = main->addAction(
-			u"About FishGram"_q,
+			u"About Fishgram"_q,
 			std::move(callback));
 		_about->setMenuRole(QAction::AboutQtRole);
 	}
