@@ -578,7 +578,7 @@ win:
 stage('jom', """
 win:
     powershell -Command "iwr -OutFile ./jom.zip https://master.qt.io/official_releases/jom/jom_1_1_3.zip"
-    powershell -Command "Expand-Archive ./jom.zip"
+    pwsh -NoProfile -NonInteractive -Command "$ErrorActionPreference = 'Stop'; Expand-Archive -LiteralPath ./jom.zip -DestinationPath ./jom; if (-not (Test-Path -LiteralPath ./jom/jom.exe -PathType Leaf)) { throw 'jom.exe missing after archive extraction' }"
     del jom.zip
 """, 'ThirdParty')
 
