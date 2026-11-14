@@ -30,9 +30,9 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 "lng_open_from_tray" = "Open Telegram";
 "lng_minimize_to_tray" = "Minimize to Tray";
 "lng_quit_from_tray" = "Quit Telegram";
-"lng_fishgram_open_from_tray" = "Open FishGram";
-"lng_fishgram_quit_from_tray" = "Quit FishGram";
-"lng_fishgram_tray_icon_text" = "FishGram is still running here,\nyou can change this in Settings.\nIf it disappears from the tray,\nyou can drag it back from the hidden icons.";
+"lng_fishgram_open_from_tray" = "Open Fishgram";
+"lng_fishgram_quit_from_tray" = "Quit Fishgram";
+"lng_fishgram_tray_icon_text" = "Fishgram is still running here,\nyou can change this in Settings.\nIf it disappears from the tray,\nyou can drag it back from the hidden icons.";
 "lng_tray_icon_text" = "Telegram is still running here,\nyou can change this in Settings.\nIf it disappears from the tray,\nyou can drag it back from the hidden icons.";
 
 // For lng_month_year or plain month name.
@@ -408,7 +408,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 "lng_edit_caption_voice" = "Sorry, you can't edit messages when you have an unsent voice message.";
 
 "lng_intro_about" = "Welcome to the official Telegram Desktop app.\nIt's fast and secure.";
-"lng_fishgram_intro_about" = "FishGram is an unofficial Telegram client.\nBuilt using the Telegram API.";
+"lng_fishgram_intro_about" = "Fishgram is an unofficial Telegram client.\nBuilt using the Telegram API.";
 "lng_start_msgs" = "Start Messaging";
 
 "lng_intro_next" = "Next";
@@ -502,7 +502,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 "lng_forum_create_new_topic" = "Create New Thread";
 "lng_dlg_search_for_messages" = "Search for messages";
 "lng_update_telegram" = "Update Telegram";
-"lng_fishgram_update" = "Update FishGram";
 "lng_dlg_search_in" = "Search messages in";
 "lng_dlg_search_from" = "From: {user}";
 "lng_chat_menu" = "Chat menu";
@@ -690,15 +689,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 "lng_settings_latest_installed" = "Latest version is installed";
 "lng_settings_update_ready" = "New version is ready";
 "lng_settings_update_fail" = "Update check failed :(";
-"lng_settings_update_error_not_configured" = "Updates are not configured for this build. Your current version is still usable.";
-"lng_settings_update_error_network" = "The update service is unavailable. Your current version is still usable.";
-"lng_settings_update_error_timeout" = "The update request timed out. Your current version is still usable.";
-"lng_settings_update_error_manifest" = "The update manifest could not be read. Your current version is still usable.";
-"lng_settings_update_error_index" = "The update index is invalid. Your current version is still usable.";
-"lng_settings_update_error_signature" = "The update signature could not be verified. Your current version is still usable.";
-"lng_settings_update_error_download" = "The update download failed. Your current version is still usable.";
-"lng_settings_update_error_validation" = "The downloaded update did not pass validation. Your current version is still usable.";
-"lng_settings_update_error_staging" = "The update could not be prepared for installation. Your current version is still usable.";
 "lng_settings_workmode_tray" = "Show tray icon";
 "lng_settings_workmode_window" = "Show taskbar icon";
 "lng_settings_window_close" = "When window closed";
@@ -1326,6 +1316,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 "lng_proxy_edit_share_qr_box_title" = "Share proxy with QR code";
 "lng_proxy_edit_share_list_button" = "Share Proxy List";
 "lng_proxy_edit_share_list_toast" = "Proxy List copied to clipboard.";
+"lng_proxy_selected#one" = "{count} proxy selected";
+"lng_proxy_selected#other" = "{count} proxies selected";
 "lng_proxy_address_label" = "Socket address";
 "lng_proxy_web_server_label" = "Web proxy server";
 "lng_proxy_web_host_ph" = "proxy.example.com";
@@ -2535,6 +2527,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 "lng_failed_add_not_mutual" = "Sorry, if a person is no longer part of a group, you need to add each other to your respective contact lists to be able to add them back.\n\nNote that they could still join via the group's invite link as long as they are not in the Removed users list.";
 
 "lng_sure_delete_contact" = "Are you sure you want to delete {contact} from your contact list?";
+"lng_sure_delete_contacts#one" = "Are you sure you want to delete {count} contact from your contact list?";
+"lng_sure_delete_contacts#other" = "Are you sure you want to delete {count} contacts from your contact list?";
 "lng_sure_delete_history" = "Are you sure you want to delete all message history with {contact}?\n\nThis action cannot be undone.";
 "lng_sure_delete_group_history" = "Are you sure you want to delete all messages in \"{group}\"?\n\nThis action cannot be undone.";
 "lng_sure_delete_channel_history" = "Are you sure you want to delete all messages in \"{channel}\"?\n\n**This action cannot be undone.**";
@@ -4932,6 +4926,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 "lng_stop_button" = "Stop";
 "lng_schedule_button" = "Schedule";
 "lng_send_silent_message" = "Send without sound";
+"lng_send_reply_to_forward" = "Reply to forward";
 "lng_schedule_message" = "Schedule message";
 "lng_reminder_message" = "Set a reminder";
 "lng_schedule_title" = "Send this message on...";
@@ -5853,6 +5848,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 "lng_contacts_stories_status#other" = "{count} stories";
 "lng_contacts_stories_status_new#one" = "{count} new story";
 "lng_contacts_stories_status_new#other" = "{count} new stories";
+"lng_contacts_selected#one" = "{count} contact selected";
+"lng_contacts_selected#other" = "{count} contacts selected";
 "lng_contact_not_joined" = "Unfortunately {name} has not joined Telegram yet, but you can send them an invitation.\n\nWe will notify you when any of your contacts join Telegram.";
 "lng_try_other_contact" = "Try someone else";
 "lng_create_group_link" = "Link";
@@ -5927,7 +5924,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 "lng_about_version" = "version {version}";
 "lng_about_text1" = "Official free messaging app based on {api_link}\nfor speed and security.";
-"lng_fishgram_about_text1" = "FishGram is an unofficial client based on {api_link}.";
+"lng_fishgram_about_text1" = "Fishgram is an unofficial client based on {api_link}.";
 "lng_about_text1_api" = "Telegram API";
 "lng_about_text2" = "This software is licensed under {gpl_link} version 3.\nSource code is available on {github_link}.";
 "lng_about_text3" = "Visit the {faq_link} for more info.";
@@ -6130,7 +6127,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 "lng_theme_preview_users#other" = "{count} people are using this theme";
 
 "lng_new_version_wrap" = "Telegram Desktop was updated to version {version}\n\n{changes}\n\nFull version history is available here:\n{link}";
-"lng_fishgram_new_version_wrap" = "FishGram was updated to version {version}\n\n{changes}\n\nFull version history is available here:\n{link}";
+"lng_fishgram_new_version_wrap" = "Fishgram was updated to version {version}\n\n{changes}\n\nFull version history is available here:\n{link}";
 "lng_new_version_minor" = "— Bug fixes and other minor improvements";
 
 "lng_menu_insert_unicode" = "Insert Unicode control character";

@@ -8,7 +8,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #pragma once
 
 #include "core/base_integration.h"
-#include "core/fishgram_update_launch.h"
 
 namespace Core {
 
@@ -42,7 +41,6 @@ public:
 	void workingFolderReady();
 	void writeDebugModeSetting();
 	void writeInstallBetaVersionsSetting();
-	bool quitForUpdate(Fn<void()> quit);
 
 	virtual ~Launcher();
 
@@ -68,17 +66,9 @@ private:
 	void init();
 	virtual void initHook() {
 	}
-	virtual bool acquireClientSessionHook() {
-		return true;
-	}
-	virtual std::optional<int> recoverUpdateHook() {
-		return std::nullopt;
-	}
 	virtual void initHighDpi();
 
 	virtual bool launchUpdater(UpdaterLaunch action) = 0;
-	virtual void showUpdateLaunchError() {
-	}
 
 	int executeApplication();
 
@@ -100,7 +90,6 @@ private:
 
 	QString _initialWorkingDir;
 	QString _customWorkingDir;
-	FishGramUpdates::UpdateLaunch _updateLaunch;
 
 };
 

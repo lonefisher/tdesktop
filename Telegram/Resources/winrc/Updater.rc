@@ -21,7 +21,6 @@
 
 /////////////////////////////////////////////////////////////////////////////
 #undef APSTUDIO_READONLY_SYMBOLS
-#include "fishgram_resource_version.h"
 
 /////////////////////////////////////////////////////////////////////////////
 // English (United States) resources
@@ -36,8 +35,8 @@ LANGUAGE LANG_ENGLISH, SUBLANG_ENGLISH_US
 //
 
 VS_VERSION_INFO VERSIONINFO
- FILEVERSION FISHGRAM_RESOURCE_NUMERIC
- PRODUCTVERSION FISHGRAM_RESOURCE_NUMERIC
+ FILEVERSION 7,4,4,0
+ PRODUCTVERSION 7,4,4,0
  FILEFLAGSMASK 0x3fL
 #ifdef _DEBUG
  FILEFLAGS 0x1L
@@ -52,12 +51,12 @@ BEGIN
     BEGIN
         BLOCK "040904b0"
         BEGIN
-            VALUE "CompanyName", "FishGram contributors"
-            VALUE "FileDescription", "FishGram Updater"
-            VALUE "FileVersion", FISHGRAM_RESOURCE_TEXT
+            VALUE "CompanyName", "Telegram FZ-LLC"
+            VALUE "FileDescription", "Telegram Desktop Updater"
+            VALUE "FileVersion", "7.4.4.0"
             VALUE "LegalCopyright", "Copyright (C) 2014-2026"
-            VALUE "ProductName", "FishGram"
-            VALUE "ProductVersion", FISHGRAM_RESOURCE_TEXT
+            VALUE "ProductName", "Telegram Desktop"
+            VALUE "ProductVersion", "7.4.4.0"
         END
     END
     BLOCK "VarFileInfo"

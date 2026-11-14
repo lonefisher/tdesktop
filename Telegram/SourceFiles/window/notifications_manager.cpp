@@ -34,7 +34,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "window/window_controller.h"
 #include "window/window_session_controller.h"
 #include "core/application.h"
-#include "core/version.h"
 #include "mainwindow.h"
 #include "api/api_reactions_notify_settings.h"
 #include "api/api_updates.h"
@@ -1705,7 +1704,7 @@ void NativeManager::doShowNotification(NotificationFields &&fields) {
 			: name;
 	};
 	const auto title = options.hideNameAndPhoto
-		? AppName.utf16()
+		? u"Fishgram"_q
 		: (scheduled && peer->isSelf())
 		? tr::lng_notification_reminder(tr::now)
 		: subWithChat();

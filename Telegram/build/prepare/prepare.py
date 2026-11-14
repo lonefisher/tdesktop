@@ -532,7 +532,7 @@ if customRunCommand:
 stage('patches', """
     git clone https://github.com/desktop-app/patches.git
     cd patches
-    git checkout e47f8669a2c144e13a2bc828b09abe6bfe89336e
+    git checkout 23d349a3ff09dbc1fa8127ce39ba9223de0edf21
 mac:
     sed -i '' "s/10.13/$MACOSX_DEPLOYMENT_TARGET/g" macos_meson_*.txt
     git clone https://github.com/desktop-app/qt6_highsierra_patches.git qt6_highsierra
@@ -578,7 +578,7 @@ win:
 stage('jom', """
 win:
     powershell -Command "iwr -OutFile ./jom.zip https://master.qt.io/official_releases/jom/jom_1_1_3.zip"
-    powershell -Command "Expand-Archive ./jom.zip"
+    pwsh -NoProfile -NonInteractive -Command "$ErrorActionPreference = 'Stop'; Expand-Archive -LiteralPath ./jom.zip -DestinationPath ./jom; if (-not (Test-Path -LiteralPath ./jom/jom.exe -PathType Leaf)) { throw 'jom.exe missing after archive extraction' }"
     del jom.zip
 """, 'ThirdParty')
 

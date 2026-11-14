@@ -12,7 +12,7 @@ include(cmake/validate_special_target.cmake)
 include(cmake/version.cmake)
 desktop_app_parse_version(Telegram/build/version)
 
-set(FISHGRAM_REVISION "1" CACHE STRING "FishGram release revision (positive uint32).")
+set(FISHGRAM_REVISION "1" CACHE STRING "Fishgram release revision (positive uint32).")
 if (NOT FISHGRAM_REVISION MATCHES "^[1-9][0-9]*$" OR FISHGRAM_REVISION GREATER 4294967295)
     message(FATAL_ERROR "FISHGRAM_REVISION must be a positive uint32.")
 endif()
@@ -31,7 +31,7 @@ endif()
 project(Telegram
     LANGUAGES C CXX
     VERSION ${desktop_app_version_cmake}
-    DESCRIPTION "FishGram unofficial client based on Telegram API"
+    DESCRIPTION "Fishgram unofficial client based on Telegram API"
     HOMEPAGE_URL "https://github.com/lonefisher/fishgram"
 )
 
@@ -54,6 +54,9 @@ get_filename_component(cmake_helpers_loc "cmake" REALPATH)
 if (NOT DESKTOP_APP_USE_PACKAGED AND WIN32)
     set(Python3_EXECUTABLE ${CMAKE_CURRENT_SOURCE_DIR}/../ThirdParty/python/Scripts/python)
 endif()
+
+# Scoop is the only update path, including when a recipe asks for autoupdate.
+set(DESKTOP_APP_DISABLE_AUTOUPDATE ON CACHE BOOL "Disable autoupdate." FORCE)
 
 include(cmake/variables.cmake)
 include(cmake/nice_target_sources.cmake)
