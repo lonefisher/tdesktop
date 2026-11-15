@@ -16,7 +16,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "base/platform/base_platform_info.h"
 #include "boxes/ringtones_box.h"
 #include "core/application.h"
-#include "core/version.h"
 #include "data/data_chat_filters.h"
 #include "data/data_session.h"
 #include "data/notify/data_notify_settings.h"
@@ -496,7 +495,7 @@ void NotificationsCount::prepareNotificationSampleLarge() {
 		p.setPen(st::dialogsNameFg);
 		p.setFont(st::msgNameFont);
 
-		auto notifyTitle = st::msgNameFont->elided(u"FishGram"_q, rectForName.width());
+		auto notifyTitle = st::msgNameFont->elided(u"Fishgram"_q, rectForName.width());
 		p.drawText(rectForName.left(), rectForName.top() + st::msgNameFont->ascent, notifyTitle);
 
 		st::notifyClose.icon.paint(p, w - st::notifyClosePos.x() - st::notifyClose.width + st::notifyClose.iconPosition.x(), st::notifyClosePos.y() + st::notifyClose.iconPosition.y(), w);
@@ -734,7 +733,7 @@ NotifyPreview::NotifyPreview(bool nameShown, bool previewShown)
 	_name.setText(
 		st::defaultSubsectionTitle.style,
 		tr::lng_notification_preview_title(tr::now));
-	_title.setText(st::defaultSubsectionTitle.style, AppName.utf16());
+	_title.setText(st::defaultSubsectionTitle.style, u"Fishgram"_q);
 
 	_text.setText(
 		st::boxTextStyle,

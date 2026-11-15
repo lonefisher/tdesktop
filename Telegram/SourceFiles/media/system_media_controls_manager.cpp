@@ -10,7 +10,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "base/platform/base_platform_system_media_controls.h"
 #include "core/application.h"
 #include "core/core_settings.h"
-#include "core/version.h"
 #include "data/data_document_media.h"
 #include "data/data_document.h"
 #include "data/data_file_origin.h"
@@ -219,7 +218,7 @@ SystemMediaControlsManager::SystemMediaControlsManager()
 		= base::Platform::SystemMediaControls::PlaybackStatus;
 	using Command = base::Platform::SystemMediaControls::Command;
 
-	_controls->setApplicationName(AppName.utf16());
+	_controls->setApplicationName(u"Fishgram"_q);
 	const auto inited = _controls->init();
 	if (!inited) {
 		LOG(("SystemMediaControlsManager failed to init."));

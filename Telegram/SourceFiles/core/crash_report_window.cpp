@@ -40,7 +40,7 @@ PreLaunchWindow::PreLaunchWindow(QString title) {
 	setWindowIcon(Window::CreateIcon());
 	setWindowFlags(Qt::Dialog | Qt::CustomizeWindowHint | Qt::WindowTitleHint | Qt::WindowCloseButtonHint);
 
-	setWindowTitle(title.isEmpty() ? u"FishGram"_q : title);
+	setWindowTitle(title.isEmpty() ? u"Fishgram"_q : title);
 
 	QPalette p(palette());
 	p.setColor(QPalette::Window, QColor(255, 255, 255));
@@ -245,7 +245,7 @@ NotStartedWindow::NotStartedWindow()
 : _label(this)
 , _log(this)
 , _close(this) {
-	_label.setText(u"Could not start FishGram!\nYou can see complete log below:"_q);
+	_label.setText(u"Could not start Fishgram!\nYou can see complete log below:"_q);
 
 	_log.setPlainText(Logs::full());
 
@@ -391,9 +391,9 @@ LastCrashedWindow::LastCrashedWindow(
 		[=] { networkSettings(); });
 
 	if (_sendingState == SendingNoReport) {
-		_label.setText(u"Last time FishGram was not closed properly."_q);
+		_label.setText(u"Last time Fishgram was not closed properly."_q);
 	} else {
-		_label.setText(u"Last time FishGram crashed :("_q);
+		_label.setText(u"Last time Fishgram crashed :("_q);
 	}
 
 	if (_updaterData) {
@@ -504,7 +504,7 @@ LastCrashedWindow::LastCrashedWindow(
 }
 
 void LastCrashedWindow::saveReport() {
-	QString to = QFileDialog::getSaveFileName(0, u"FishGram Crash Report"_q, QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation) + u"/report.telegramcrash"_q, u"FishGram crash report (*.telegramcrash)"_q);
+	QString to = QFileDialog::getSaveFileName(0, u"Fishgram Crash Report"_q, QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation) + u"/report.telegramcrash"_q, u"Fishgram crash report (*.telegramcrash)"_q);
 	if (!to.isEmpty()) {
 		QFile file(to);
 		if (file.open(QIODevice::WriteOnly)) {
@@ -619,12 +619,12 @@ void LastCrashedWindow::checkingFinished() {
 	LOG(("Crash report check for sending done, result: %1").arg(QString::fromUtf8(result)));
 
 	if (result == "Old") {
-		_pleaseSendReport.setText(u"This report is about some old version of FishGram."_q);
+		_pleaseSendReport.setText(u"This report is about some old version of Fishgram."_q);
 		_sendingState = SendingTooOld;
 		updateControls();
 		return;
 	} else if (result == "Unofficial") {
-		_pleaseSendReport.setText(u"You use an unofficial FishGram client."_q);
+		_pleaseSendReport.setText(u"You use an unofficial Fishgram client."_q);
 		_sendingState = SendingUnofficial;
 		updateControls();
 		return;
@@ -912,7 +912,7 @@ void LastCrashedWindow::updateControls() {
 		h += _networkSettings.height() + padding;
 	}
 
-	QSize s(2 * padding + QFontMetrics(_label.font()).horizontalAdvance(u"Last time FishGram was not closed properly."_q) + padding + _networkSettings.width(), h);
+	QSize s(2 * padding + QFontMetrics(_label.font()).horizontalAdvance(u"Last time Fishgram was not closed properly."_q) + padding + _networkSettings.width(), h);
 	if (s == size()) {
 		resizeEvent(0);
 	} else {
@@ -976,10 +976,6 @@ void LastCrashedWindow::setUpdatingState(UpdatingState state, bool force) {
 			if (Core::checkReadyUpdate()) {
 				cSetRestartingUpdate(true);
 				Core::Quit();
-				if (Core::Quitting()) {
-					return;
-				}
-				setUpdatingState(UpdatingFail);
 				return;
 			} else {
 				setUpdatingState(UpdatingFail);

@@ -24,7 +24,6 @@ extern "C" {
 #include <array>
 #include <cstring>
 #include <memory>
-#include <limits>
 
 namespace Core::Updates {
 namespace {
@@ -124,11 +123,8 @@ void SetError(QString *error, const QString &text) {
 }
 
 [[nodiscard]] EvpPkey LoadEd25519Pem(const QByteArray &pem) {
-	if (pem.size() > std::numeric_limits<int>::max()) {
-		return nullptr;
-	}
 	const auto bio = std::unique_ptr<BIO, BioDeleter>(
-		BIO_new_mem_buf(pem.constData(), int(pem.size())));
+		BIO_new_mem_buf(pem.constData(), pem.size()));
 	if (!bio) {
 		return nullptr;
 	}
@@ -888,11 +884,6 @@ std::optional<VerifiedUpdate> VerifyUpdate(
 
 	auto result = VerifiedUpdate();
 	const auto heldVersion = held ? held->version : quint32(0);
-	if (held && (carried->version < heldVersion
-		|| (carried->version == heldVersion && carried->bytes != held->bytes))) {
-		SetError(error, QStringLiteral("Key manifest rollback or conflicting version."));
-		return std::nullopt;
-	}
 	if (carried->version > heldVersion) {
 		result.adoptManifest = true;
 		result.manifest = std::move(*carried);

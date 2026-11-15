@@ -513,8 +513,8 @@ void AutostartToggle(bool enabled, Fn<void(bool)> done) {
 		silent,
 		FOLDERID_Startup,
 		L"-autostart",
-		L"FishGram autorun link.\n"
-		"You can disable autorun in FishGram settings.");
+		L"Fishgram autorun link.\n"
+		"You can disable autorun in Fishgram settings.");
 	if (done) {
 		done(enabled && success);
 	}
@@ -828,8 +828,8 @@ void psSendToMenu(bool send, bool silent) {
 		silent,
 		FOLDERID_SendTo,
 		L"--",
-		L"FishGram send to link.\n"
-		"You can disable send to menu item in FishGram settings.");
+		L"Fishgram send to link.\n"
+		"You can disable send to menu item in Fishgram settings.");
 }
 
 // Stub while we still support Windows 7.

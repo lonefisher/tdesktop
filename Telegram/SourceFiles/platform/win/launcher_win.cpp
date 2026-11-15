@@ -9,9 +9,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 #include "core/crash_reports.h"
 #include "core/update_checker.h"
-#include "core/update_channel.h"
-#include "_other/fishgram_update_transaction.h"
-#include "_other/fishgram_update_restart.h"
 
 #include <windows.h>
 #include <shellapi.h>
@@ -19,39 +16,9 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 #include <crtdbg.h>
 #include <cstdlib>
-#include <QtWidgets/QApplication>
-#include <QtWidgets/QWidget>
 
 namespace Platform {
 namespace {
-
-HWND UpdateOwnerWindow() {
-	if (const auto owner = GetActiveWindow()) return owner;
-	if (const auto window = QApplication::activeWindow()) {
-		return reinterpret_cast<HWND>(window->winId());
-	}
-	return nullptr;
-}
-
-QString UpdateRunnerError(Core::FishGramUpdates::WindowsTransaction::Result error) {
-	using Core::FishGramUpdates::WindowsTransaction::Result;
-	switch (error) {
-	case Result::InvalidInstallPath:
-		return u"The FishGram installation folder is invalid."_q;
-	case Result::WriteDenied:
-		return u"The installation or update files failed permission and safety checks. Use a private writable installation folder."_q;
-	case Result::Busy:
-		return u"Another updater is using this installation. Close it and retry."_q;
-	case Result::RecoveryFailed:
-		return u"An interrupted update needs recovery before another update can start."_q;
-	case Result::FileInUse:
-		return u"The installed updater is in use. Close the other updater and retry."_q;
-	case Result::CopyFailed:
-		return u"The update program could not be copied. Check free space and file access, then retry."_q;
-	default:
-		return u"The installed update program could not be prepared. Check the installation files and retry."_q;
-	}
-}
 
 // Turn a CRT/STL assertion (or pure-virtual / invalid-parameter) into a real,
 // crash-reported failure instead of a modal Abort/Retry/Ignore dialog that
@@ -155,49 +122,6 @@ void Launcher::initHook() {
 	}
 }
 
-bool Launcher::acquireClientSessionHook() {
-	const auto result = Core::FishGramClientGate::TryAcquire(
-		QDir::toNativeSeparators(cExeDir()).toStdWString(),
-		false,
-		&_clientSessionLease);
-	if (result != Core::FishGramClientGate::AcquireResult::Acquired) {
-		MessageBoxW(nullptr,
-			L"FishGram cannot safely open account data because this installation "
-			L"is updating, already in use by an updater, or its private session lock is unavailable.",
-			L"FishGram startup blocked", MB_OK | MB_ICONERROR);
-		return false;
-	}
-	return true;
-}
-
-std::optional<int> Launcher::recoverUpdateHook() {
-	namespace Transaction = Core::FishGramUpdates::WindowsTransaction;
-	const auto recovery = Transaction::InspectStartupRecovery(
-		QDir::toNativeSeparators(cExeDir()).toStdWString());
-	if (recovery.state == Transaction::StartupRecovery::State::None) {
-		return std::nullopt;
-	}
-	if (recovery.state == Transaction::StartupRecovery::State::Blocked) {
-		MessageBoxW(nullptr,
-			L"FishGram cannot recover the interrupted update safely. "
-			L"Close other FishGram instances and use the program recovery backup before opening account data.",
-			L"FishGram update recovery", MB_OK | MB_ICONERROR);
-		return 1;
-	}
-	auto arguments = QStringList{
-		u"-recover"_q,
-		u"-installpath"_q, '"' + cExeDir() + '"',
-		u"-workdir"_q, '"' + cWorkingDir() + '"',
-		u"-waitpid"_q, QString::number(qulonglong(GetCurrentProcessId())),
-	};
-	if (recovery.requiresElevation) {
-		arguments.push_back(u"-writeprotected"_q);
-		arguments.push_back('"' + cExeDir() + '"');
-	}
-	return launch(recovery.requiresElevation ? u"runas"_q : QString(),
-		QString::fromStdWString(recovery.updaterPath), arguments) ? 0 : 1;
-}
-
 std::optional<QStringList> Launcher::readArgumentsHook(
 		int argc,
 		char *argv[]) const {
@@ -217,7 +141,6 @@ std::optional<QStringList> Launcher::readArgumentsHook(
 }
 
 bool Launcher::launchUpdater(UpdaterLaunch action) {
-	_updateLaunchError = u"The FishGram executable name is unavailable."_q;
 	if (cExeName().isEmpty()) {
 		return false;
 	}
@@ -227,22 +150,11 @@ bool Launcher::launchUpdater(UpdaterLaunch action) {
 		: (cWriteProtected()
 			? u"runas"_q
 			: QString());
-	auto binaryPath = cExeDir() + cExeName();
-	if (action != UpdaterLaunch::JustRelaunch) {
-		if (!Core::checkReadyUpdate()) {
-			_updateLaunchError = u"The downloaded update is no longer ready. Check for updates and retry."_q;
-			return false;
-		}
-		std::wstring runner;
-		auto failure = Core::FishGramUpdates::WindowsTransaction::Result::IoError;
-		if (!Core::FishGramUpdates::WindowsTransaction::PrepareUpdateRunner(
-			QDir::toNativeSeparators(cExeDir()).toStdWString(), &runner, &failure)) {
-			_updateLaunchError = UpdateRunnerError(failure);
-			return false;
-		}
-		// Never execute an unauthenticated binary from the work directory.
-		binaryPath = QString::fromStdWString(runner);
-	}
+	const auto binaryPath = (action == UpdaterLaunch::JustRelaunch)
+		? (cExeDir() + cExeName())
+		: (cWriteProtected()
+			? (cWorkingDir() + u"tupdates/temp/Updater.exe"_q)
+			: (cExeDir() + u"Updater.exe"_q));
 
 	auto argumentsList = QStringList();
 	const auto pushArgument = [&](const QString &argument) {
@@ -257,7 +169,7 @@ bool Launcher::launchUpdater(UpdaterLaunch action) {
 	if (cStartInTray()) {
 		pushArgument(u"-startintray"_q);
 	}
-	if (customWorkingDir() || action == UpdaterLaunch::PerformUpdate) {
+	if (customWorkingDir()) {
 		pushArgument(u"-workdir"_q);
 		pushArgument('"' + cWorkingDir() + '"');
 	}
@@ -273,37 +185,37 @@ bool Launcher::launchUpdater(UpdaterLaunch action) {
 		}
 	} else {
 		pushArgument(u"-update"_q);
-		pushArgument(u"-waitpid"_q);
-		pushArgument(QString::number(qulonglong(GetCurrentProcessId())));
-		pushArgument(u"-fromversion"_q);
-		pushArgument(QString::number(qulonglong(Core::RunningUpdateVersion())));
-		if (cInstallBetaVersion()) pushArgument(u"-beta"_q);
+		auto created = FILETIME();
+		auto exited = FILETIME();
+		auto kernel = FILETIME();
+		auto user = FILETIME();
+		if (GetProcessTimes(GetCurrentProcess(), &created, &exited, &kernel, &user)) {
+			// WHY: Application and storage destruction precede this call, so
+			// the updater can terminate us if remaining process teardown hangs.
+			const auto creationTime = (quint64(created.dwHighDateTime) << 32)
+				| created.dwLowDateTime;
+			pushArgument(u"-finishprocess"_q);
+			pushArgument(QString::number(GetCurrentProcessId()));
+			pushArgument(QString::number(creationTime));
+		} else {
+			const auto error = GetLastError();
+			LOG(("Update Error: could not query process creation time: %1"
+				).arg(error));
+		}
 		pushArgument(u"-exename"_q);
 		pushArgument('"' + cExeName() + '"');
-		pushArgument(u"-installpath"_q);
-		pushArgument('"' + cExeDir() + '"');
 		if (cWriteProtected()) {
 			pushArgument(u"-writeprotected"_q);
 			pushArgument('"' + cExeDir() + '"');
 		}
 	}
-	return launch(operation, binaryPath, argumentsList,
-		action == UpdaterLaunch::PerformUpdate);
-}
-
-void Launcher::showUpdateLaunchError() {
-	LOG(("Update Error: %1").arg(_updateLaunchError));
-	const auto message = (_updateLaunchError
-		+ u"\n\nFishGram will continue running the current version."_q).toStdWString();
-	MessageBoxW(UpdateOwnerWindow(), message.c_str(),
-		L"FishGram update", MB_OK | MB_ICONWARNING);
+	return launch(operation, binaryPath, argumentsList);
 }
 
 bool Launcher::launch(
 		const QString &operation,
 		const QString &binaryPath,
-		const QStringList &argumentsList,
-		bool keepRunning) {
+		const QStringList &argumentsList) {
 	const auto convertPath = [](const QString &path) {
 		return QDir::toNativeSeparators(path).toStdWString();
 	};
@@ -316,18 +228,23 @@ bool Launcher::launch(
 		).arg(arguments
 		));
 
-	if (!keepRunning) {
-		Logs::closeMain();
-		CrashReports::Finish();
-	}
+	Logs::closeMain();
+	CrashReports::Finish();
 
-	const auto error = Core::FishGramUpdates::LaunchUpdateProcess(
-		UpdateOwnerWindow(), operation.toStdWString(), nativeBinaryPath,
-		arguments.toStdWString(), nativeWorkingDir);
-	if (error != ERROR_SUCCESS) {
-		_updateLaunchError = (error == ERROR_CANCELLED)
-			? u"Starting the update was cancelled."_q
-			: u"Windows could not start the update program (error %1). Check file access and retry."_q.arg(error);
+	const auto hwnd = HWND(0);
+	const auto result = ShellExecute(
+		hwnd,
+		operation.isEmpty() ? nullptr : operation.toStdWString().c_str(),
+		nativeBinaryPath.c_str(),
+		arguments.toStdWString().c_str(),
+		nativeWorkingDir.empty() ? nullptr : nativeWorkingDir.c_str(),
+		SW_SHOWNORMAL);
+	if (int64(result) < 32) {
+		DEBUG_LOG(("Application Error: failed to execute %1, working directory: '%2', result: %3"
+			).arg(binaryPath
+			).arg(cWorkingDir()
+			).arg(int64(result)
+			));
 		return false;
 	}
 	return true;

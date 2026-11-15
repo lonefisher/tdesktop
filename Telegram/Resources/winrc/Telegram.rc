@@ -61,11 +61,11 @@ BEGIN
     BEGIN
         BLOCK "040904b0"
         BEGIN
-            VALUE "CompanyName", "FishGram contributors"
-            VALUE "FileDescription", "FishGram - unofficial Telegram client"
+            VALUE "CompanyName", "Fishgram contributors"
+            VALUE "FileDescription", "Fishgram - unofficial Telegram client"
             VALUE "FileVersion", FISHGRAM_RESOURCE_TEXT
             VALUE "LegalCopyright", "Copyright (C) 2014-2026"
-            VALUE "ProductName", "FishGram"
+            VALUE "ProductName", "Fishgram"
             VALUE "ProductVersion", FISHGRAM_RESOURCE_TEXT
         END
     END

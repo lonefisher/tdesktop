@@ -17,7 +17,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "core/application.h"
 #include "core/core_settings.h"
 #include "core/sandbox.h"
-#include "boxes/peer_list_controllers.h"
+#include "boxes/contacts_box.h"
 #include "boxes/about_box.h"
 #include "lang/lang_keys.h"
 #include "storage/localstorage.h"
@@ -420,7 +420,7 @@ void MainWindow::createGlobalMenu() {
 		tr::lng_mac_menu_about_telegram(
 			tr::now,
 			lt_telegram,
-			u"FishGram"_q),
+			u"Fishgram"_q),
 		[=] {
 			ensureWindowShown();
 			controller().show(Box(AboutBox));

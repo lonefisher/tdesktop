@@ -60,35 +60,15 @@ if (WIN32)
 endif()
 
 include(cmake/generate_update_keys.cmake)
-set(FISHGRAM_UPDATE_TRUST_DIRECTORY "" CACHE PATH "FishGram public root and signed key manifest directory.")
-if (EXISTS "${FISHGRAM_UPDATE_TRUST_DIRECTORY}/root-public.pem"
-    AND EXISTS "${FISHGRAM_UPDATE_TRUST_DIRECTORY}/manifest.min.json"
-    AND EXISTS "${FISHGRAM_UPDATE_TRUST_DIRECTORY}/manifest.sig")
-    file(SHA256 "${FISHGRAM_UPDATE_TRUST_DIRECTORY}/root-public.pem" fishgram_root_hash)
-    file(SHA256 "${res_loc}/update/root-public.pem" official_root_hash)
-    if (fishgram_root_hash STREQUAL official_root_hash)
-        message(FATAL_ERROR "FishGram cannot trust the official Telegram update root.")
-    endif()
-    add_compile_definitions(FISHGRAM_UPDATE_TRUST_CONFIGURED=1)
-    generate_update_keys(Telegram "${FISHGRAM_UPDATE_TRUST_DIRECTORY}")
-else()
-    if (NOT DESKTOP_APP_DISABLE_AUTOUPDATE)
-        message(FATAL_ERROR "FishGram automatic updates require its own public trust bundle.")
-    endif()
-    set(fishgram_empty_trust "${CMAKE_CURRENT_BINARY_DIR}/unconfigured-update-trust")
-    file(MAKE_DIRECTORY "${fishgram_empty_trust}")
-    foreach(trust_file root-public.pem manifest.min.json manifest.sig)
-        file(WRITE "${fishgram_empty_trust}/${trust_file}" "UNCONFIGURED")
-    endforeach()
-    generate_update_keys(Telegram "${fishgram_empty_trust}")
-endif()
+generate_update_keys(Telegram ${res_loc}/update)
 
 if (DESKTOP_APP_TEST_APPS OR TDESKTOP_BUILD_UPDATE_TESTS)
     include(cmake/test_update_verify.cmake)
     if (NOT DESKTOP_APP_DISABLE_AUTOUPDATE)
         include(cmake/test_update_unpack.cmake)
-        # FishGram Windows updater tests use the transaction and restart
-        # targets configured by the parent tools/test-update-verify.ps1.
+        if (WIN32 AND NOT build_winstore)
+            include(cmake/test_updater_win.cmake)
+        endif()
     endif()
 endif()
 include(cmake/test_iv_editor_state.cmake)
@@ -196,6 +176,8 @@ PRIVATE
     api/api_editing.cpp
     api/api_editing.h
     api/api_filter_updates.h
+    api/api_forward_reply.cpp
+    api/api_forward_reply.h
     api/api_global_privacy.cpp
     api/api_global_privacy.h
     api/api_hash.cpp
@@ -363,6 +345,8 @@ PRIVATE
     boxes/choose_filter_box.h
     boxes/connection_box.cpp
     boxes/connection_box.h
+    boxes/contacts_box.cpp
+    boxes/contacts_box.h
     boxes/create_poll_box.cpp
     boxes/create_poll_box.h
     boxes/delete_messages_box.cpp
@@ -654,9 +638,6 @@ PRIVATE
     core/ui_integration.cpp
     core/ui_integration.h
     core/update_channel.h
-    core/fishgram_update_policy.h
-    core/fishgram_update_feed.h
-    core/fishgram_update_feed.cpp
     core/update_checker.cpp
     core/update_checker.h
     core/update_keys.cpp
@@ -892,6 +873,8 @@ PRIVATE
     dialogs/ui/dialogs_topics_view.h
     dialogs/ui/dialogs_video_userpic.cpp
     dialogs/ui/dialogs_video_userpic.h
+    dialogs/dialogs_archive_slide.cpp
+    dialogs/dialogs_archive_slide.h
     dialogs/dialogs_community_chats_list.cpp
     dialogs/dialogs_community_chats_list.h
     dialogs/dialogs_community_requestable_list.cpp
@@ -916,6 +899,8 @@ PRIVATE
     dialogs/dialogs_pinned_list.h
     dialogs/dialogs_quick_action.cpp
     dialogs/dialogs_quick_action.h
+    dialogs/dialogs_removed_row_slide.cpp
+    dialogs/dialogs_removed_row_slide.h
     dialogs/dialogs_row.cpp
     dialogs/dialogs_row.h
     dialogs/dialogs_search_from_controllers.cpp
@@ -1357,6 +1342,8 @@ PRIVATE
     info/media/info_media_list_widget.h
     info/media/info_media_provider.cpp
     info/media/info_media_provider.h
+    info/media/info_media_voice_filter.cpp
+    info/media/info_media_voice_filter.h
     info/media/info_media_widget.cpp
     info/media/info_media_widget.h
     info/members/info_members_widget.cpp
@@ -3013,7 +3000,6 @@ endif()
 target_prepare_qrc(Telegram)
 
 if (NOT DESKTOP_APP_DISABLE_AUTOUPDATE AND NOT build_macstore AND NOT build_winstore)
-    target_sources(Telegram PRIVATE ${src_loc}/core/fishgram_update_payload.cpp ${src_loc}/core/fishgram_update_payload.h)
     add_executable(Updater WIN32)
     init_non_host_target(Updater)
 
@@ -3022,8 +3008,6 @@ if (NOT DESKTOP_APP_DISABLE_AUTOUPDATE AND NOT build_macstore AND NOT build_wins
     nice_target_sources(Updater ${src_loc}
     PRIVATE
         _other/updater_win.cpp
-        core/fishgram_data_snapshot.cpp
-        core/fishgram_data_snapshot.h
         _other/updater_linux.cpp
         _other/updater_osx.m
         _other/updater.h
@@ -3034,12 +3018,6 @@ if (NOT DESKTOP_APP_DISABLE_AUTOUPDATE AND NOT build_macstore AND NOT build_wins
     )
 
     if (WIN32)
-        target_sources(Updater PRIVATE ${src_loc}/core/fishgram_update_payload.cpp
-            ${src_loc}/core/update_verify.cpp ${src_loc}/core/update_keys.cpp)
-        target_include_directories(Updater PRIVATE ${src_loc} ${CMAKE_CURRENT_BINARY_DIR}/gen)
-        add_dependencies(Updater Telegram_update_keys)
-        target_link_libraries(Updater PRIVATE desktop-app::external_qt
-            desktop-app::external_auto_updates desktop-app::external_openssl)
         get_filename_component(lib_base_loc lib_base REALPATH)
         nice_target_sources(Updater ${lib_base_loc}
         PRIVATE
@@ -3076,8 +3054,7 @@ if (NOT DESKTOP_APP_DISABLE_AUTOUPDATE AND NOT build_macstore AND NOT build_wins
         )
     endif()
 
-    option(FISHGRAM_BUILD_PACKER "Build the FishGram update package tool." OFF)
-    if (DESKTOP_APP_SPECIAL_TARGET OR FISHGRAM_BUILD_PACKER)
+    if (DESKTOP_APP_SPECIAL_TARGET)
         add_executable(Packer)
         init_target(Packer)
 
