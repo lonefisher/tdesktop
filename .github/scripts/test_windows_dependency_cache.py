@@ -181,10 +181,64 @@ class CacheGuardTests(unittest.TestCase):
         leaked.write_bytes(b'private')
         self.assertIn('Libraries/win64/id_rsa name', cache.credential_hits(root))
         leaked.unlink()
+        short = root / 'ThirdParty/nuget/short.config'
+        short.parent.mkdir(parents=True)
+        short.write_text('#define __ghs__\ntoken=ghp_example\n', encoding='utf-8')
+        self.assertEqual(cache.credential_hits(root), [])
         token = root / 'ThirdParty/nuget/nuget.config'
-        token.parent.mkdir(parents=True)
-        token.write_text('token=ghp_example\n', encoding='utf-8')
+        token.write_text('token=ghp_' + ('A' * 36) + '\n', encoding='utf-8')
         self.assertIn('ThirdParty/nuget/nuget.config token', cache.credential_hits(root))
+
+    def test_guard_accepts_flagged_public_files_and_rejects_real_secrets(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        root = Path(temporary.name)
+        (root / 'Libraries').mkdir()
+        (root / 'ThirdParty').mkdir()
+        public = {
+            'Libraries/win64/ada/out/CMakeFiles/3.31.6/CompilerIdC/CMakeCCompilerId.c':
+                b'#define __ghs__ 1\n',
+            'Libraries/win64/Qt-6.11.2/mkspecs/features/toolchain.prf':
+                b'contains(QMAKE_COMPILER, ghs): defineReplace(__ghs__)\n',
+            'Libraries/win64/tg_angle/include/platform/gl_features.json':
+                b'{"compiler":"__ghs__"}\n',
+            'Libraries/win64/openssl3/test/certs/v3-certs-RC2.p12': b'fixture',
+            'Libraries/win64/openssl3/test/shibboleth.pfx': b'fixture',
+            'Libraries/win64/qt_6.11.2/qtbase/tests/auto/network/ssl/qsslcertificate/pkcs12/leaf.p12':
+                b'fixture',
+            'Libraries/win64/qt_6.11.2/qtbase/tests/auto/network/ssl/qsslcertificate/pkcs12/leaf-nokey.p12':
+                b'fixture',
+            'Libraries/win64/tde2e/example/uwp/app/TdApp_TemporaryKey.pfx': b'fixture',
+        }
+        for name, payload in public.items():
+            path = root / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(payload)
+        self.assertEqual(cache.credential_hits(root), [])
+        key = root / 'Libraries/win64/openssl3/test/certs/id_rsa'
+        key.write_bytes(b'private')
+        short = root / 'ThirdParty/short.txt'
+        short.write_text('ghp_' + ('A' * 35) + '\n', encoding='utf-8')
+        self.assertEqual(
+            cache.credential_hits(root),
+            ['Libraries/win64/openssl3/test/certs/id_rsa name'])
+        outside = root / 'Libraries/win64/local/app.p12'
+        outside.parent.mkdir(parents=True)
+        outside.write_bytes(b'not a fixture')
+        other = root / 'Libraries/win64/tde2e/example/uwp/app/Other.pfx'
+        other.write_bytes(b'not the named fixture')
+        pat = root / 'ThirdParty/notes.txt'
+        pat.write_text(
+            'github_pat_' + ('A' * 22) + '_' + ('B' * 59) + '\n'
+            + 'ghs_' + ('C' * 36) + '\n',
+            encoding='utf-8')
+        hits = cache.credential_hits(root)
+        self.assertIn('Libraries/win64/local/app.p12 name', hits)
+        self.assertIn('Libraries/win64/tde2e/example/uwp/app/Other.pfx name', hits)
+        self.assertIn('ThirdParty/notes.txt token', hits)
+        self.assertIn('Libraries/win64/openssl3/test/certs/id_rsa name', hits)
+        self.assertNotIn('ThirdParty/short.txt token', hits)
+        self.assertEqual(len(hits), 4)
 
     def test_workflow_keeps_pull_requests_read_only(self):
         text = (ROOT / '.github/workflows/fishgram-checks.yml').read_text(encoding='utf-8')
