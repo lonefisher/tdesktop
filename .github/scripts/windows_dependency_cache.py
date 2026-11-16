@@ -55,7 +55,10 @@ CREDENTIAL_NAMES = {
 }
 CREDENTIAL_SUFFIXES = ('.pfx', '.p12', '.snk', '.clixml')
 FORBIDDEN_PARTS = {'.private', 'update-trust'}
-TOKEN_MARKERS = (b'ghs_', b'github_pat_', b'ghp_', b'gho_')
+# `__ghs__` contains the letters ghs_; a GitHub token continues with its body.
+GITHUB_TOKEN = re.compile(
+    rb'(?:ghp_|gho_|ghs_)[A-Za-z0-9]{36}'
+    rb'|github_pat_[A-Za-z0-9]{22}_[A-Za-z0-9]{59}')
 TOKEN_SKIP_SUFFIXES = {
     '.a', '.dll', '.exe', '.jpg', '.lib', '.nupkg', '.o', '.obj', '.pack',
     '.pdb', '.png', '.pyc', '.rlib', '.ttf', '.woff', '.zip',
@@ -277,6 +280,18 @@ def _omitted_from_archive(parts):
     return any(part.casefold() in OMITTED_PARTS for part in parts)
 
 
+def _upstream_fixture(parts):
+    folded = tuple(part.casefold() for part in parts)
+    if (len(folded) > 4 and folded[0] == 'libraries' and folded[2] == 'openssl3'
+            and folded[3] == 'test'):
+        return True
+    if (len(folded) == 7 and folded[0] == 'libraries' and folded[2] == 'tde2e'
+            and folded[3:6] == ('example', 'uwp', 'app')
+            and folded[6] == 'tdapp_temporarykey.pfx'):
+        return True
+    return 'qtbase/tests/auto/network/ssl/qsslcertificate/pkcs12/' in '/'.join(folded) + '/'
+
+
 def credential_hits(root):
     hits = []
     for name in DEPENDENCY_ROOTS:
@@ -296,7 +311,9 @@ def credential_hits(root):
                     continue
                 folded = [part.casefold() for part in parts]
                 lowered = filename.casefold()
-                if (lowered in CREDENTIAL_NAMES or lowered.endswith(CREDENTIAL_SUFFIXES)
+                suffix_hit = (lowered.endswith(CREDENTIAL_SUFFIXES)
+                              and not _upstream_fixture(parts))
+                if (lowered in CREDENTIAL_NAMES or suffix_hit
                         or any(part in FORBIDDEN_PARTS for part in folded)):
                     hits.append(relative.as_posix() + ' name')
                     continue
@@ -310,7 +327,7 @@ def credential_hits(root):
                     continue
                 with path.open('rb') as handle:
                     sample = handle.read(256 * 1024)
-                if any(marker in sample for marker in TOKEN_MARKERS):
+                if GITHUB_TOKEN.search(sample):
                     hits.append(relative.as_posix() + ' token')
     return sorted(hits)
 
