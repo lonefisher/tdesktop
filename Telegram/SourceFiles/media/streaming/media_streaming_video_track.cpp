@@ -7,6 +7,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "media/streaming/media_streaming_video_track.h"
 
+#include "media/streaming/media_streaming_rtx_vsr.h"
 #include "ffmpeg/ffmpeg_utility.h"
 #include "media/audio/media_audio.h"
 #include "media/media_common.h"
@@ -29,6 +30,15 @@ constexpr auto kFinishedPosition = std::numeric_limits<crl::time>::max();
 static_assert(kDisplaySkipped != kTimeUnknown);
 
 using ::Media::ValidFrameSize;
+
+[[nodiscard]] QSize RtxRequestTarget(
+		const FrameRequest &request,
+		int rotation) {
+	auto target = !request.outer.isEmpty()
+		? request.outer
+		: request.resize;
+	return RtxUnrotatedTarget(target, rotation);
+}
 
 [[nodiscard]] crl::time WorldTimeDelay(crl::time trackDelay, float64 speed) {
 	if (trackDelay <= 0 || speed <= 0. || speed == 1.) {
@@ -1280,10 +1290,71 @@ FrameWithInfo VideoTrack::frameWithInfo(const Instance *instance) {
 	};
 }
 
+QImage VideoTrack::superResolvedFrame(
+		not_null<Frame*> frame,
+		const FrameRequest &request) {
+	if (!RtxVideoSuperResolutionEnabled()) {
+		if (_vsrIndex != -1) {
+			_vsrPrepared = QImage();
+			_vsrIndex = -1;
+		}
+		return {};
+	}
+	if (_vsrIndex == frame->index
+		&& _vsrRequest == request
+		&& !_vsrPrepared.isNull()) {
+		return _vsrPrepared;
+	}
+	const auto target = RtxRequestTarget(request, _streamRotation);
+	if (target.isEmpty()) {
+		return {};
+	}
+	const auto yuv = ((frame->format == FrameFormat::YUV420)
+			|| (frame->format == FrameFormat::NV12))
+		? &frame->yuv
+		: nullptr;
+	const auto upscaled = RtxSuperResolvedImage(
+		FrameWithInfo{
+			.image = frame->original,
+			.yuv = (yuv && yuv->y.data) ? yuv : nullptr,
+			.format = frame->format,
+			.index = frame->index,
+			.alpha = frame->alpha,
+		},
+		target);
+	if (upscaled.isNull()) {
+		return {};
+	}
+	auto prepared = GoodForRequest(
+			upscaled,
+			false,
+			_streamRotation,
+			request)
+		? upscaled
+		: PrepareByRequest(
+			upscaled,
+			false,
+			_streamAspect,
+			_streamRotation,
+			request,
+			QImage());
+	if (prepared.isNull()) {
+		return {};
+	}
+	_vsrIndex = frame->index;
+	_vsrRequest = request;
+	_vsrPrepared = std::move(prepared);
+	return _vsrPrepared;
+}
+
 QImage VideoTrack::frameImage(
 		not_null<Frame*> frame,
 		const FrameRequest &request,
 		const Instance *instance) {
+	if (const auto resolved = superResolvedFrame(frame, request)
+		; !resolved.isNull()) {
+		return resolved;
+	}
 	const auto i = frame->prepared.find(instance);
 	const auto none = (i == frame->prepared.end());
 	const auto preparedFor = frame->prepared.empty()
