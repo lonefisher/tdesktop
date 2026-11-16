@@ -31,6 +31,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "info/downloads/info_downloads_widget.h"
 #include "info/info_memento.h"
 #include "lang/lang_keys.h"
+#include "media/streaming/media_streaming_rtx_vsr.h"
 #include "main/main_account.h"
 #include "main/main_domain.h"
 #include "main/main_session.h"
@@ -955,6 +956,40 @@ void BuildPerformanceSection(SectionBuilder &builder) {
 			Core::App().settings().setHardwareAcceleratedVideo(enabled);
 			Core::App().saveSettingsDelayed();
 		}, hwAccel->lifetime());
+	}
+
+	if (Media::Streaming::RtxVideoSuperResolutionSupported()) {
+		const auto pref = Media::Streaming::kRtxVideoSuperResolutionPref;
+		const auto vsr = builder.addButton({
+			.id = u"advanced/rtx_vsr"_q,
+			.title = tr::lng_fishgram_rtx_vsr(),
+			.st = &st::settingsButtonNoIcon,
+			.toggled = rpl::single(
+				Core::App().settings().readPref<bool>(
+					pref,
+					Media::Streaming::kRtxVideoSuperResolutionDefault)),
+			.keywords = {
+				u"nvidia"_q,
+				u"rtx"_q,
+				u"vsr"_q,
+				u"super resolution"_q,
+				u"video"_q,
+			},
+		});
+		if (vsr) {
+			vsr->toggledValue(
+			) | rpl::filter([=](bool enabled) {
+				return enabled
+					!= Core::App().settings().readPref<bool>(
+						pref,
+						Media::Streaming::kRtxVideoSuperResolutionDefault);
+			}) | rpl::on_next([=](bool enabled) {
+				Core::App().settings().writePref<bool>(pref, enabled);
+				Core::App().saveSettingsDelayed();
+				Media::Streaming::RtxVideoSuperResolutionNoteToggled(enabled);
+			}, vsr->lifetime());
+		}
+		builder.addDividerText(tr::lng_fishgram_rtx_vsr_about());
 	}
 
 #ifdef DESKTOP_APP_USE_ANGLE

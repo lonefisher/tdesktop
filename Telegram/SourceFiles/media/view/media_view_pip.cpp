@@ -9,6 +9,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 #include "media/streaming/media_streaming_player.h"
 #include "media/streaming/media_streaming_document.h"
+#include "media/streaming/media_streaming_rtx_vsr.h"
 #include "media/streaming/media_streaming_utility.h"
 #include "media/view/media_view_playback_progress.h"
 #include "media/view/media_view_pip_opengl.h"
@@ -1775,7 +1776,15 @@ QImage Pip::videoFrame(const FrameRequest &request) const {
 Streaming::FrameWithInfo Pip::videoFrameWithInfo() const {
 	Expects(canUseVideoFrame());
 
-	return _instance->frameWithInfo();
+	auto info = _instance->frameWithInfo();
+	if (!Streaming::RtxVideoSuperResolutionEnabled()) {
+		return info;
+	}
+	const auto ratio = style::DevicePixelRatio();
+	auto target = _panel.inner().size() * ratio;
+	const auto rotation = (_rotation + _instance->info().video.rotation) % 360;
+	target = Streaming::RtxUnrotatedTarget(target, rotation);
+	return Streaming::WithRtxSuperResolution(std::move(info), target);
 }
 
 QImage Pip::staticContent() const {

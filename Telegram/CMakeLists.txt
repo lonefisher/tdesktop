@@ -75,6 +75,7 @@ include(cmake/test_iv_editor_state.cmake)
 include(cmake/test_iv_editor_table_grid.cmake)
 include(cmake/test_wallet_card_tint.cmake)
 include(cmake/test_wallet_phrase_shares.cmake)
+include(cmake/test_rtx_vsr.cmake)
 
 set_target_properties(Telegram PROPERTIES AUTOMOC ON)
 
@@ -1663,6 +1664,9 @@ PRIVATE
     media/streaming/media_streaming_reader.h
     media/streaming/media_streaming_round_preview.cpp
     media/streaming/media_streaming_round_preview.h
+    media/streaming/media_streaming_rtx_vsr.cpp
+    media/streaming/media_streaming_rtx_vsr.h
+    media/streaming/media_streaming_rtx_vsr_plan.h
     media/streaming/media_streaming_utility.cpp
     media/streaming/media_streaming_utility.h
     media/streaming/media_streaming_video_track.cpp
@@ -2717,6 +2721,8 @@ if (WIN32)
     if (QT_VERSION LESS 6 OR DESKTOP_APP_WIN7_BASELINE)
         target_link_libraries(Telegram PRIVATE desktop-app::win_directx_helper)
     endif()
+
+    target_link_libraries(Telegram PRIVATE d3d11 dxgi)
 
     if (DESKTOP_APP_WIN7_BASELINE)
         # ANGLE loads d3dcompiler_47.dll from modules folder next to exe.

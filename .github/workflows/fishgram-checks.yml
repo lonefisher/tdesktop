@@ -186,7 +186,7 @@ jobs:
     timeout-minutes: 350
     cache-mode: read
     permissions:
-      actions: read
+      actions: write
       contents: read
     steps:
       - run: git config --global core.longpaths true
@@ -300,6 +300,72 @@ jobs:
         shell: pwsh
         working-directory: product
         run: ./tools/build-telegram.ps1 -TestIdentity -Parallel 4
+      - name: Stage a portable Windows test folder
+        if: success()
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $release = Join-Path $env:GITHUB_WORKSPACE 'product\build-modified\Release'
+          $exe = Join-Path $release 'Telegram.exe'
+          if (-not (Test-Path -LiteralPath $exe -PathType Leaf)) {
+            throw "Test build is missing $exe"
+          }
+          $stage = Join-Path $env:RUNNER_TEMP 'fishgram-windows-test'
+          if (Test-Path -LiteralPath $stage) {
+            Remove-Item -LiteralPath $stage -Recurse -Force
+          }
+          New-Item -ItemType Directory -Path $stage | Out-Null
+          Copy-Item -LiteralPath $exe -Destination (Join-Path $stage 'Telegram.exe')
+          Get-ChildItem -LiteralPath $release -File -Filter '*.dll' | ForEach-Object {
+            Copy-Item -LiteralPath $_.FullName -Destination (Join-Path $stage $_.Name)
+          }
+          $modules = Join-Path $release 'modules'
+          if (Test-Path -LiteralPath $modules -PathType Container) {
+            Copy-Item -LiteralPath $modules -Destination (Join-Path $stage 'modules') -Recurse
+          }
+          $data = Join-Path $stage 'FishGramData'
+          New-Item -ItemType Directory -Path $data | Out-Null
+          @(
+            'Portable data for this test build.'
+            'Start-FishGram.cmd passes -workdir to this folder.'
+            'Do not delete it. The test client must not use %APPDATA%\FishGram.'
+          ) | Set-Content -LiteralPath (Join-Path $data 'PORTABLE.txt') -Encoding ascii
+          $launcher = @(
+            '@echo off'
+            'setlocal'
+            'if not exist "%~dp0FishGramData\" mkdir "%~dp0FishGramData"'
+            'start "" "%~dp0Telegram.exe" -workdir "%~dp0FishGramData"'
+          ) -join "`r`n"
+          Set-Content -LiteralPath (Join-Path $stage 'Start-FishGram.cmd') -Value ($launcher + "`r`n") -Encoding ascii
+          $readme = @(
+            'Fishgram Windows test build. Not a release.'
+            ''
+            'Unzip into a new writable folder. Keep FishGramData next to Telegram.exe.'
+            'Start with Start-FishGram.cmd. It runs Telegram.exe -workdir FishGramData.'
+            'Account data and log.txt stay in that FishGramData folder.'
+            'This does not read or write %APPDATA%\FishGram.'
+            'Do not copy Telegram.exe into an installed Fishgram directory.'
+            ''
+            'A normal Telegram account can sign in. This build uses the public'
+            'Telegram Desktop API identity (api_id 611335), so the login is a'
+            'separate session from an installed Fishgram.'
+            ''
+            'VSR log line, in FishGramData\log.txt:'
+            'VSR Info: NVIDIA RTX video super resolution is active.'
+          ) -join "`r`n"
+          Set-Content -LiteralPath (Join-Path $stage 'README.txt') -Value ($readme + "`r`n") -Encoding ascii
+          $bytes = (Get-ChildItem -LiteralPath $stage -Recurse -File | Measure-Object -Property Length -Sum).Sum
+          Write-Output ("Staged portable test folder bytes: " + $bytes)
+          Get-ChildItem -LiteralPath $stage -Recurse | ForEach-Object { Write-Output $_.FullName }
+      - name: Upload portable Windows test build
+        if: success()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: fishgram-windows-test
+          path: ${{ runner.temp }}/fishgram-windows-test
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 6
       - name: Sanitized build diagnostics only
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02

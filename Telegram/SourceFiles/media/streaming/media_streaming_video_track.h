@@ -171,6 +171,9 @@ private:
 		not_null<Frame*> frame,
 		const FrameRequest &request,
 		const Instance *instance);
+	[[nodiscard]] QImage superResolvedFrame(
+		not_null<Frame*> frame,
+		const FrameRequest &request);
 
 	const int _streamIndex = 0;
 	const AVRational _streamTimeBase;
@@ -181,6 +184,9 @@ private:
 
 	using Implementation = VideoTrackObject;
 	crl::object_on_queue<Implementation> _wrapped;
+	int _vsrIndex = -1;
+	FrameRequest _vsrRequest;
+	QImage _vsrPrepared;
 
 };
 
