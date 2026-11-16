@@ -70,6 +70,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "media/stories/media_stories_view.h"
 #include "media/streaming/media_streaming_document.h"
 #include "media/streaming/media_streaming_player.h"
+#include "media/streaming/media_streaming_rtx_vsr.h"
 #include "media/player/media_player_instance.h"
 #include "history/history.h"
 #include "history/history_item_helpers.h"
@@ -1526,6 +1527,14 @@ bool OverlayWidget::streamingRequiresControls() const {
 QImage OverlayWidget::videoFrame() const {
 	Expects(videoShown());
 
+	if (Streaming::RtxVideoSuperResolutionEnabled()) {
+		const auto info = videoFrameWithInfo();
+		if (info.format == Streaming::FrameFormat::ARGB32
+			&& !info.yuv
+			&& !info.image.isNull()) {
+			return info.image;
+		}
+	}
 	auto request = Streaming::FrameRequest();
 	//request.radius = (_document && _document->isVideoMessage())
 	//	? ImageRoundRadius::Ellipse
@@ -1538,7 +1547,7 @@ QImage OverlayWidget::videoFrame() const {
 Streaming::FrameWithInfo OverlayWidget::videoFrameWithInfo() const {
 	Expects(videoShown());
 
-	return _streamed->instance.player().ready()
+	auto info = _streamed->instance.player().ready()
 		? _streamed->instance.frameWithInfo()
 		: Streaming::FrameWithInfo{
 			.image = _streamed->instance.info().video.cover,
@@ -1546,6 +1555,16 @@ Streaming::FrameWithInfo OverlayWidget::videoFrameWithInfo() const {
 			.index = -2,
 			.alpha = _streamed->instance.info().video.alpha,
 		};
+	if (!Streaming::RtxVideoSuperResolutionEnabled()) {
+		return info;
+	}
+	// contentGeometry() already stores the unrotated frame rectangle.
+	const auto geometry = contentGeometry();
+	const auto ratio = style::DevicePixelRatio();
+	const auto target = QSize(
+		int(std::ceil(geometry.rect.width() * ratio)),
+		int(std::ceil(geometry.rect.height() * ratio)));
+	return Streaming::WithRtxSuperResolution(std::move(info), target);
 }
 
 QImage OverlayWidget::currentVideoFrameImage() const {
