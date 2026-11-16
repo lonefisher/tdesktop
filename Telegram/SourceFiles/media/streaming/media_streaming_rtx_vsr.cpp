@@ -117,7 +117,7 @@ public:
 				continue;
 			}
 			const auto attempt = trySize(source, size);
-			if (attempt.kind == Attempt::Done) {
+			if (attempt.kind == AttemptKind::Done) {
 				if (failedEdge) {
 					_rejectAtOrAbove = failedEdge;
 				}
@@ -128,7 +128,7 @@ public:
 				}
 				break;
 			}
-			if (attempt.kind == Attempt::Stop) {
+			if (attempt.kind == AttemptKind::Stop) {
 				remember(frame, source.token, targetPixels, QImage());
 				finish(RtxVsrBackendResult::Unsupported);
 				return {};
