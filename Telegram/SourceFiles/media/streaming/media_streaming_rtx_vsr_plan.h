@@ -15,6 +15,7 @@ namespace Media::Streaming {
 
 inline constexpr auto kRtxVideoSuperResolutionPref
 	= "fishgram/rtx_video_super_resolution";
+inline constexpr auto kRtxVideoSuperResolutionDefault = true;
 
 // Any NVIDIA adapter. Device id is intentionally not part of the check.
 inline constexpr auto kRtxNvidiaVendorId = 0x10DEu;
@@ -82,9 +83,9 @@ struct RtxVsrSession {
 		&& (vendorId == kRtxNvidiaVendorId);
 }
 
-// Missing and empty stored bool prefs are off. A non-empty value is on.
+// A missing pref uses the default. An empty stored value is an explicit off.
 [[nodiscard]] inline bool RtxBoolPrefEnabled(bool present, bool nonEmpty) {
-	return present && nonEmpty;
+	return present ? nonEmpty : kRtxVideoSuperResolutionDefault;
 }
 
 [[nodiscard]] inline bool RtxVsrBlocked(RtxVsrSession session) {

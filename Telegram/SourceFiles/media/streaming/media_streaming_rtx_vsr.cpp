@@ -930,7 +930,7 @@ bool &EnabledLatch() {
 bool RtxVideoSuperResolutionEnabled() {
 	const auto enabled = Core::App().settings().readPref<bool>(
 		kRtxVideoSuperResolutionPref,
-		false);
+		kRtxVideoSuperResolutionDefault);
 #if defined Q_OS_WIN
 	if (enabled && !EnabledLatch()) {
 		Processor::Instance().noteToggledOn();

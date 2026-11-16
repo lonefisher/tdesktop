@@ -30,9 +30,10 @@ void TestPrefAndAdapter() {
 		std::string(kRtxVideoSuperResolutionPref)
 			== "fishgram/rtx_video_super_resolution",
 		"pref key");
-	Check(!RtxBoolPrefEnabled(false, false), "missing pref is off");
-	Check(!RtxBoolPrefEnabled(true, false), "empty pref is off");
-	Check(RtxBoolPrefEnabled(true, true), "stored pref is on");
+	Check(kRtxVideoSuperResolutionDefault, "default follows the driver");
+	Check(RtxBoolPrefEnabled(false, false), "missing pref stays on");
+	Check(!RtxBoolPrefEnabled(true, false), "stored off stays off");
+	Check(RtxBoolPrefEnabled(true, true), "stored on stays on");
 
 	Check(RtxAdapterQualifies(kRtxNvidiaVendorId, false, false), "nvidia");
 	Check(!RtxAdapterQualifies(kRtxNvidiaVendorId, true, false), "software");
@@ -43,13 +44,21 @@ void TestPrefAndAdapter() {
 
 void TestPlan() {
 	const auto source = RtxVsrSize{ 640, 360 };
-	const auto off = PlanRtxVideoSuperResolution(
-		false,
+	const auto follow = PlanRtxVideoSuperResolution(
+		RtxBoolPrefEnabled(false, false),
 		true,
 		false,
 		source,
 		{ 1280, 720 });
-	Check(off.decision == RtxVsrDecision::Skip, "default off skips");
+	Check(follow.decision == RtxVsrDecision::Upscale, "default requests vsr");
+
+	const auto off = PlanRtxVideoSuperResolution(
+		RtxBoolPrefEnabled(true, false),
+		true,
+		false,
+		source,
+		{ 1280, 720 });
+	Check(off.decision == RtxVsrDecision::Skip, "explicit off skips");
 
 	const auto unsupported = PlanRtxVideoSuperResolution(
 		true,

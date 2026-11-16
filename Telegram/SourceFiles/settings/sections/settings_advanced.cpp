@@ -965,7 +965,9 @@ void BuildPerformanceSection(SectionBuilder &builder) {
 			.title = tr::lng_fishgram_rtx_vsr(),
 			.st = &st::settingsButtonNoIcon,
 			.toggled = rpl::single(
-				Core::App().settings().readPref<bool>(pref, false)),
+				Core::App().settings().readPref<bool>(
+					pref,
+					Media::Streaming::kRtxVideoSuperResolutionDefault)),
 			.keywords = {
 				u"nvidia"_q,
 				u"rtx"_q,
@@ -978,7 +980,9 @@ void BuildPerformanceSection(SectionBuilder &builder) {
 			vsr->toggledValue(
 			) | rpl::filter([=](bool enabled) {
 				return enabled
-					!= Core::App().settings().readPref<bool>(pref, false);
+					!= Core::App().settings().readPref<bool>(
+						pref,
+						Media::Streaming::kRtxVideoSuperResolutionDefault);
 			}) | rpl::on_next([=](bool enabled) {
 				Core::App().settings().writePref<bool>(pref, enabled);
 				Core::App().saveSettingsDelayed();
