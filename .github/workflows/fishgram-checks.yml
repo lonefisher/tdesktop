@@ -4,6 +4,11 @@ on:
   push:
     branches: [custom/main, 'ci/**']
   workflow_dispatch:
+    inputs:
+      use_github_hosted:
+        description: Force GitHub-hosted windows-2022 instead of the build PC
+        type: boolean
+        default: false
 permissions:
   contents: read
 concurrency:
@@ -12,6 +17,7 @@ concurrency:
 jobs:
   helpers:
     name: Production helper tests
+    # Different fishgram pin in product/; keep it off the persistent build-PC tree.
     runs-on: windows-2022
     timeout-minutes: 20
     steps:
@@ -41,25 +47,65 @@ jobs:
     if: >-
       github.ref == 'refs/heads/custom/main' &&
       (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
-    runs-on: windows-2022
+    # Fork PRs and use_github_hosted use windows-2022. Otherwise queue for fishgram-builder.
+    runs-on: ${{ fromJSON(((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository) || github.event.inputs.use_github_hosted == 'true') && '["windows-2022"]' || '["self-hosted", "Windows", "X64", "fishgram-builder"]') }}
     timeout-minutes: 350
     cache-mode: write
     permissions:
       actions: write
       contents: read
     steps:
-      - run: git config --global core.longpaths true
+      - name: Put Git on PATH for the build PC service
+        if: runner.environment == 'self-hosted'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $git = $null
+          $found = Get-Command git -ErrorAction SilentlyContinue
+          if ($found) { $git = $found.Source }
+          if (-not $git) {
+            $roots = @(
+              $env:ProgramW6432,
+              $env:ProgramFiles,
+              ${env:ProgramFiles(x86)},
+              'C:\Program Files',
+              'C:\Program Files (x86)'
+            ) | Where-Object { $_ } | Select-Object -Unique
+            $checked = @()
+            foreach ($root in $roots) {
+              foreach ($leaf in @('Git\cmd', 'Git\bin')) {
+                $dir = Join-Path $root $leaf
+                $candidate = Join-Path $dir 'git.exe'
+                $checked += $candidate
+                if (Test-Path -LiteralPath $candidate) {
+                  $git = $candidate
+                  Add-Content -Path $env:GITHUB_PATH -Value $dir -Encoding utf8NoBOM
+                  break
+                }
+              }
+              if ($git) { break }
+            }
+          }
+          if (-not $git) {
+            throw ('Git for Windows was not found. Checked: ' + ($checked -join ', '))
+          }
+          & $git config --global core.longpaths true
+      - name: Enable long paths on GitHub-hosted runners
+        if: runner.environment != 'self-hosted'
+        run: git config --global core.longpaths true
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           repository: lonefisher/fishgram
           ref: 5345fdaa01d17fb5cfef48dd0e8234f24fc7a863
           path: product
           persist-credentials: false
+          clean: ${{ runner.environment == 'github-hosted' && 'true' || 'false' }}
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           path: product/tdesktop
           submodules: recursive
           persist-credentials: false
+          clean: ${{ runner.environment == 'github-hosted' && 'true' || 'false' }}
       - name: Check out every pinned recursive dependency
         shell: pwsh
         working-directory: product/tdesktop
@@ -83,8 +129,23 @@ jobs:
           $recipe.upstreamVersion=$Matches[1]
           $recipe.releaseReady=$false
           $recipe | ConvertTo-Json -Depth 4 | Set-Content fishgram.json
+      - name: Require PowerShell 7 on the build PC
+        if: runner.environment == 'self-hosted'
+        shell: powershell
+        run: |
+          if (-not (Get-Command pwsh -ErrorAction SilentlyContinue)) {
+            throw 'The build PC needs PowerShell 7. Install it machine-wide so pwsh is on PATH for the runner service. See .github/self-hosted-windows-runner.md.'
+          }
+      - name: Pin MSVC 14.44 on the build PC
+        if: runner.environment == 'self-hosted'
+        shell: pwsh
+        working-directory: product
+        run: |
+          Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
+          & ./tdesktop/.github/scripts/pin-msvc-14-44.ps1 -ProductRoot $PWD.Path
       - name: Exact dependency cache identity
         id: key
+        if: runner.environment == 'github-hosted'
         shell: pwsh
         working-directory: product
         run: |
@@ -105,6 +166,7 @@ jobs:
           Write-Output "Source commit is not part of the dependency cache key: $head"
       - name: Look up the exact dependency cache
         id: cache
+        if: runner.environment == 'github-hosted'
         uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830
         with:
           lookup-only: true
@@ -116,14 +178,14 @@ jobs:
         working-directory: product
         run: ./tools/prepare-dependencies.ps1 -Silent
       - name: Print dependency directory sizes
-        if: steps.cache.outputs.cache-hit != 'true'
+        if: runner.environment == 'github-hosted' && steps.cache.outputs.cache-hit != 'true'
         shell: pwsh
         working-directory: product
         run: |
           python -u ./tdesktop/.github/scripts/windows_dependency_cache.py report --root .
           if ($LASTEXITCODE) { throw 'Dependency size report failed.' }
       - name: Reject credential-like files before caching
-        if: steps.cache.outputs.cache-hit != 'true'
+        if: runner.environment == 'github-hosted' && steps.cache.outputs.cache-hit != 'true'
         shell: pwsh
         working-directory: product
         run: |
@@ -131,7 +193,7 @@ jobs:
           if ($LASTEXITCODE) { throw 'Dependency cache rejected credential-like files.' }
       - name: Pack dependencies and record the compressed archive size
         id: pack
-        if: steps.cache.outputs.cache-hit != 'true'
+        if: runner.environment == 'github-hosted' && steps.cache.outputs.cache-hit != 'true'
         shell: pwsh
         working-directory: product
         run: |
@@ -139,6 +201,7 @@ jobs:
           if ($LASTEXITCODE) { throw 'Dependency snapshot exceeded the 8 GB archive budget or could not be packed.' }
       - name: Save the dependency cache from custom/main
         if: >-
+          runner.environment == 'github-hosted' &&
           steps.cache.outputs.cache-hit != 'true' &&
           steps.pack.outputs.ready == 'true' &&
           github.ref == 'refs/heads/custom/main' &&
@@ -155,25 +218,65 @@ jobs:
       !cancelled() &&
       (needs.warmup.result == 'success' || needs.warmup.result == 'skipped') &&
       (github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch')
-    runs-on: windows-2022
+    # Fork PRs and use_github_hosted use windows-2022. Otherwise queue for fishgram-builder.
+    runs-on: ${{ fromJSON(((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository) || github.event.inputs.use_github_hosted == 'true') && '["windows-2022"]' || '["self-hosted", "Windows", "X64", "fishgram-builder"]') }}
     timeout-minutes: 350
     cache-mode: read
     permissions:
       actions: write
       contents: read
     steps:
-      - run: git config --global core.longpaths true
+      - name: Put Git on PATH for the build PC service
+        if: runner.environment == 'self-hosted'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $git = $null
+          $found = Get-Command git -ErrorAction SilentlyContinue
+          if ($found) { $git = $found.Source }
+          if (-not $git) {
+            $roots = @(
+              $env:ProgramW6432,
+              $env:ProgramFiles,
+              ${env:ProgramFiles(x86)},
+              'C:\Program Files',
+              'C:\Program Files (x86)'
+            ) | Where-Object { $_ } | Select-Object -Unique
+            $checked = @()
+            foreach ($root in $roots) {
+              foreach ($leaf in @('Git\cmd', 'Git\bin')) {
+                $dir = Join-Path $root $leaf
+                $candidate = Join-Path $dir 'git.exe'
+                $checked += $candidate
+                if (Test-Path -LiteralPath $candidate) {
+                  $git = $candidate
+                  Add-Content -Path $env:GITHUB_PATH -Value $dir -Encoding utf8NoBOM
+                  break
+                }
+              }
+              if ($git) { break }
+            }
+          }
+          if (-not $git) {
+            throw ('Git for Windows was not found. Checked: ' + ($checked -join ', '))
+          }
+          & $git config --global core.longpaths true
+      - name: Enable long paths on GitHub-hosted runners
+        if: runner.environment != 'self-hosted'
+        run: git config --global core.longpaths true
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           repository: lonefisher/fishgram
           ref: 5345fdaa01d17fb5cfef48dd0e8234f24fc7a863
           path: product
           persist-credentials: false
+          clean: ${{ runner.environment == 'github-hosted' && 'true' || 'false' }}
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           path: product/tdesktop
           submodules: recursive
           persist-credentials: false
+          clean: ${{ runner.environment == 'github-hosted' && 'true' || 'false' }}
       - name: Check out every pinned recursive dependency
         shell: pwsh
         working-directory: product/tdesktop
@@ -197,8 +300,23 @@ jobs:
           $recipe.upstreamVersion=$Matches[1]
           $recipe.releaseReady=$false
           $recipe | ConvertTo-Json -Depth 4 | Set-Content fishgram.json
+      - name: Require PowerShell 7 on the build PC
+        if: runner.environment == 'self-hosted'
+        shell: powershell
+        run: |
+          if (-not (Get-Command pwsh -ErrorAction SilentlyContinue)) {
+            throw 'The build PC needs PowerShell 7. Install it machine-wide so pwsh is on PATH for the runner service. See .github/self-hosted-windows-runner.md.'
+          }
+      - name: Pin MSVC 14.44 on the build PC
+        if: runner.environment == 'self-hosted'
+        shell: pwsh
+        working-directory: product
+        run: |
+          Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
+          & ./tdesktop/.github/scripts/pin-msvc-14-44.ps1 -ProductRoot $PWD.Path
       - name: Exact dependency cache identity
         id: key
+        if: runner.environment == 'github-hosted'
         shell: pwsh
         working-directory: product
         run: |
@@ -220,12 +338,13 @@ jobs:
       # Read-only. A pull request must not save or replace this cache.
       - name: Restore the exact dependency cache
         id: cache
+        if: runner.environment == 'github-hosted'
         uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830
         with:
           path: ${{ runner.temp }}/fishgram-dependencies-v3.zip
           key: ${{ steps.key.outputs.key }}
       - name: Unpack the exact dependency snapshot
-        if: steps.cache.outputs.cache-hit == 'true'
+        if: runner.environment == 'github-hosted' && steps.cache.outputs.cache-hit == 'true'
         shell: pwsh
         working-directory: product
         run: |
@@ -233,7 +352,7 @@ jobs:
           if ($LASTEXITCODE) { throw 'Dependency restore failed.' }
           Remove-Item -LiteralPath "$env:RUNNER_TEMP/fishgram-dependencies-v3.zip" -Force
       - name: Recreate runner-local Python after cache restore
-        if: steps.cache.outputs.cache-hit == 'true'
+        if: runner.environment == 'github-hosted' && steps.cache.outputs.cache-hit == 'true'
         shell: pwsh
         working-directory: product
         run: ./tools/refresh-build-python.ps1
@@ -242,6 +361,15 @@ jobs:
         shell: pwsh
         working-directory: product
         run: ./tools/prepare-dependencies.ps1 -Silent
+      - name: Drop stale diagnostics from the persistent work tree
+        if: runner.environment == 'self-hosted'
+        shell: pwsh
+        working-directory: product
+        run: |
+          $reports = Join-Path $PWD 'reports'
+          if (Test-Path -LiteralPath $reports) {
+            Get-ChildItem -LiteralPath $reports -Filter '*-diagnostics.json' -File | Remove-Item -Force
+          }
       - name: Compile test identity, never upload client or raw logs
         shell: pwsh
         working-directory: product
