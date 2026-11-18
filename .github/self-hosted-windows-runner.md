@@ -21,7 +21,7 @@ runs-on: ${{ fromJSON(((github.event_name == 'pull_request' && github.event.pull
    - Visual Studio 2022 Build Tools 17.14，`C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools`
    - MSVC 14.44.35207（`VC\Tools\MSVC\14.44.35207`）
    - Windows SDK 10.0.26100.0
-   - Git。安装器若只改了当前用户的 PATH，以服务方式运行的 runner 看不到 `git`。作业会再查 `C:\Program Files\Git\cmd`（以及 `bin`、32 位 Program Files）并把该目录加进后续步骤。装在别的位置时，把 `Git\cmd` 加到系统 PATH，然后重启 runner 服务
+   - Git。安装器若只改了当前用户的 PATH，以服务方式运行的 runner 看不到 `git`。这台机器上的 `pwsh` 在 `C:\Program Files (x86)\PowerShell\7`，是 32 位进程，它的 `ProgramFiles` 不是 64 位的 `C:\Program Files`。作业会再查 `ProgramW6432` 和 `C:\Program Files\Git\cmd`。装在别的位置时，把 `Git\cmd` 加到系统 PATH，然后重启 runner 服务
    - CMake 和 Ninja：随 Visual Studio 的 “C++ CMake tools for Windows” 组件安装，或另外放到 PATH
 3. 打开本仓库 Settings → Actions → Runners → New self-hosted runner，选择 Windows、x64。把压缩包解压到 `C:\fishgram-ci\tdesktop`。
 4. 在该目录执行。Token 用页面上显示的那一个，它用过即失效：
