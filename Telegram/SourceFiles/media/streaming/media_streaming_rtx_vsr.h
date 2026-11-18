@@ -16,9 +16,24 @@ namespace Media::Streaming {
 [[nodiscard]] bool RtxVideoSuperResolutionSupported();
 void RtxVideoSuperResolutionNoteToggled(bool enabled);
 
+enum class RtxVsrPath : unsigned char {
+	Overlay,
+	Track,
+	Pip,
+	Rhi,
+};
+
+void RtxNotePresentation(
+	const char *swapFormat,
+	int pixelWidth,
+	int pixelHeight,
+	float devicePixelRatio);
+
 [[nodiscard]] QImage RtxSuperResolvedImage(
 	const FrameWithInfo &frame,
-	QSize targetPixels);
+	QSize targetPixels,
+	RtxVsrPath path = RtxVsrPath::Overlay,
+	quint64 videoTag = 0);
 
 [[nodiscard]] inline QSize RtxUnrotatedTarget(QSize target, int rotation) {
 	if ((rotation % 180) == 90) {
@@ -29,8 +44,14 @@ void RtxVideoSuperResolutionNoteToggled(bool enabled);
 
 [[nodiscard]] inline FrameWithInfo WithRtxSuperResolution(
 		FrameWithInfo frame,
-		QSize targetPixels) {
-	auto image = RtxSuperResolvedImage(frame, targetPixels);
+		QSize targetPixels,
+		RtxVsrPath path = RtxVsrPath::Overlay,
+		quint64 videoTag = 0) {
+	auto image = RtxSuperResolvedImage(
+		frame,
+		targetPixels,
+		path,
+		videoTag);
 	if (image.isNull()) {
 		return frame;
 	}
