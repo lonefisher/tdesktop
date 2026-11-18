@@ -55,7 +55,36 @@ jobs:
       actions: write
       contents: read
     steps:
-      - run: git config --global core.longpaths true
+      - name: Put Git on PATH for the build PC service
+        if: runner.environment == 'self-hosted'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $git = $null
+          $found = Get-Command git -ErrorAction SilentlyContinue
+          if ($found) { $git = $found.Source }
+          if (-not $git) {
+            foreach ($dir in @(
+              (Join-Path $env:ProgramFiles 'Git\cmd'),
+              (Join-Path $env:ProgramFiles 'Git\bin'),
+              (Join-Path ${env:ProgramFiles(x86)} 'Git\cmd'),
+              (Join-Path ${env:ProgramFiles(x86)} 'Git\bin')
+            )) {
+              $candidate = Join-Path $dir 'git.exe'
+              if (Test-Path -LiteralPath $candidate) {
+                $git = $candidate
+                Add-Content -Path $env:GITHUB_PATH -Value $dir -Encoding utf8NoBOM
+                break
+              }
+            }
+          }
+          if (-not $git) {
+            throw 'Git for Windows is not on PATH. Install it, or add Git\cmd to the system PATH used by the runner service.'
+          }
+          & $git config --global core.longpaths true
+      - name: Enable long paths on GitHub-hosted runners
+        if: runner.environment != 'self-hosted'
+        run: git config --global core.longpaths true
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           repository: lonefisher/fishgram
@@ -189,7 +218,36 @@ jobs:
       actions: write
       contents: read
     steps:
-      - run: git config --global core.longpaths true
+      - name: Put Git on PATH for the build PC service
+        if: runner.environment == 'self-hosted'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $git = $null
+          $found = Get-Command git -ErrorAction SilentlyContinue
+          if ($found) { $git = $found.Source }
+          if (-not $git) {
+            foreach ($dir in @(
+              (Join-Path $env:ProgramFiles 'Git\cmd'),
+              (Join-Path $env:ProgramFiles 'Git\bin'),
+              (Join-Path ${env:ProgramFiles(x86)} 'Git\cmd'),
+              (Join-Path ${env:ProgramFiles(x86)} 'Git\bin')
+            )) {
+              $candidate = Join-Path $dir 'git.exe'
+              if (Test-Path -LiteralPath $candidate) {
+                $git = $candidate
+                Add-Content -Path $env:GITHUB_PATH -Value $dir -Encoding utf8NoBOM
+                break
+              }
+            }
+          }
+          if (-not $git) {
+            throw 'Git for Windows is not on PATH. Install it, or add Git\cmd to the system PATH used by the runner service.'
+          }
+          & $git config --global core.longpaths true
+      - name: Enable long paths on GitHub-hosted runners
+        if: runner.environment != 'self-hosted'
+        run: git config --global core.longpaths true
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           repository: lonefisher/fishgram

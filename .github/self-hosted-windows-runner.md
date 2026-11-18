@@ -21,7 +21,7 @@ runs-on: ${{ fromJSON(((github.event_name == 'pull_request' && github.event.pull
    - Visual Studio 2022 Build Tools 17.14，`C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools`
    - MSVC 14.44.35207（`VC\Tools\MSVC\14.44.35207`）
    - Windows SDK 10.0.26100.0
-   - Git
+   - Git。安装器若只改了当前用户的 PATH，以服务方式运行的 runner 看不到 `git`。作业会再查 `C:\Program Files\Git\cmd`（以及 `bin`、32 位 Program Files）并把该目录加进后续步骤。装在别的位置时，把 `Git\cmd` 加到系统 PATH，然后重启 runner 服务
    - CMake 和 Ninja：随 Visual Studio 的 “C++ CMake tools for Windows” 组件安装，或另外放到 PATH
 3. 打开本仓库 Settings → Actions → Runners → New self-hosted runner，选择 Windows、x64。把压缩包解压到 `C:\fishgram-ci\tdesktop`。
 4. 在该目录执行。Token 用页面上显示的那一个，它用过即失效：
@@ -32,7 +32,7 @@ config.cmd --url https://github.com/lonefisher/tdesktop --token <页面上的 to
 
 默认标签 `self-hosted`、`Windows`、`X64` 会自动加上，只要再加 `fishgram-builder`。不要选 ephemeral。这个仓库只留这一个 runner 进程，两个作业共用 `C:\fishgram-ci\tdesktop-work`。
 
-5. 不要删除、不要定期清理 `C:\fishgram-ci\tdesktop-work`。自托管作业的 checkout 使用 `clean: false`，`Libraries`、`ThirdParty` 和 `build-modified` 会留在这棵目录里。第一次运行会完整准备依赖并完整编译，之后只重编有变化的部分。工作流每次还会执行 `git config --global core.longpaths true`。
+5. 不要删除、不要定期清理 `C:\fishgram-ci\tdesktop-work`。自托管作业的 checkout 使用 `clean: false`，`Libraries`、`ThirdParty` 和 `build-modified` 会留在这棵目录里。第一次运行会完整准备依赖并完整编译，之后只重编有变化的部分。作业会执行 `git config --global core.longpaths true`。
 6. 装好后在 Runners 页面应看到 Idle，四个标签都在。C: 上大约 1.9 TB 空闲，依赖和构建树几十 GB，放得下。
 
 机器上的 Python 3.15 可以留着。工作流自己用 `actions/setup-python` 安装 3.13。
