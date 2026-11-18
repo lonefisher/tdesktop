@@ -20,7 +20,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #endif
 
 #include <d3d11_1.h>
-#include <dxgi1_4.h>
+#include <dxgi1_6.h>
 
 #ifdef small
 #undef small
@@ -29,6 +29,242 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 namespace Media::Streaming {
 namespace {
+
+struct PresentationNote {
+	const char *swap = "unknown";
+	int width = 0;
+	int height = 0;
+	float dpr = 0.f;
+};
+
+PresentationNote &Presentation() {
+	static auto note = PresentationNote();
+	return note;
+}
+
+struct DesktopColorNote {
+	const char *hdr = "unknown";
+	const char *cs = "unknown";
+	int bits = 0;
+	int width = 0;
+	int height = 0;
+	bool ready = false;
+};
+
+[[nodiscard]] const char *FrameFormatName(FrameFormat format) {
+	switch (format) {
+	case FrameFormat::None: return "none";
+	case FrameFormat::ARGB32: return "argb32";
+	case FrameFormat::YUV420: return "yuv420";
+	case FrameFormat::NV12: return "nv12";
+	case FrameFormat::NativeTexture: return "native";
+	}
+	return "other";
+}
+
+[[nodiscard]] const char *PathName(RtxVsrPath path) {
+	switch (path) {
+	case RtxVsrPath::Overlay: return "overlay";
+	case RtxVsrPath::Track: return "track";
+	case RtxVsrPath::Pip: return "pip";
+	case RtxVsrPath::Rhi: return "rhi";
+	}
+	return "other";
+}
+
+[[nodiscard]] quint64 CurrentThread() {
+#if defined Q_OS_WIN
+	return quint64(GetCurrentThreadId());
+#else
+	return 0;
+#endif
+}
+
+struct DebugGate {
+	const char *reason = nullptr;
+	quint64 video = 0;
+	int sourceWidth = 0;
+	int sourceHeight = 0;
+	int outputWidth = 0;
+	int outputHeight = 0;
+	bool have = false;
+};
+
+DesktopColorNote DesktopColor() {
+	static auto note = DesktopColorNote();
+	if (note.ready) {
+		return note;
+	}
+	note.ready = true;
+#if defined Q_OS_WIN
+	IDXGIFactory1 *factory = nullptr;
+	if (FAILED(CreateDXGIFactory1(IID_PPV_ARGS(&factory))) || !factory) {
+		return note;
+	}
+	IDXGIAdapter1 *adapter = nullptr;
+	const auto remote = (GetSystemMetrics(SM_REMOTESESSION) != 0);
+	for (UINT index = 0; ; ++index) {
+		if (adapter) {
+			adapter->Release();
+			adapter = nullptr;
+		}
+		const auto enumerate = factory->EnumAdapters1(index, &adapter);
+		if (enumerate == DXGI_ERROR_NOT_FOUND) {
+			break;
+		}
+		if (FAILED(enumerate) || !adapter) {
+			break;
+		}
+		DXGI_ADAPTER_DESC1 desc = {};
+		if (FAILED(adapter->GetDesc1(&desc))) {
+			continue;
+		}
+		const auto software = (desc.Flags & DXGI_ADAPTER_FLAG_SOFTWARE) != 0;
+		if (!RtxAdapterQualifies(desc.VendorId, software, remote)) {
+			continue;
+		}
+		IDXGIOutput *output = nullptr;
+		if (FAILED(adapter->EnumOutputs(0, &output)) || !output) {
+			break;
+		}
+		IDXGIOutput6 *output6 = nullptr;
+		const auto queried = output->QueryInterface(IID_PPV_ARGS(&output6));
+		if (SUCCEEDED(queried) && output6) {
+			DXGI_OUTPUT_DESC1 desc1 = {};
+			if (SUCCEEDED(output6->GetDesc1(&desc1))) {
+				note.width = int(desc1.DesktopCoordinates.right
+					- desc1.DesktopCoordinates.left);
+				note.height = int(desc1.DesktopCoordinates.bottom
+					- desc1.DesktopCoordinates.top);
+				note.bits = int(desc1.BitsPerColor);
+				switch (desc1.ColorSpace) {
+				case DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709:
+					note.hdr = "sdr";
+					note.cs = "g22-p709";
+					break;
+				case DXGI_COLOR_SPACE_RGB_FULL_G10_NONE_P709:
+					note.hdr = "scrgb";
+					note.cs = "g10-p709";
+					break;
+				case DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020:
+					note.hdr = "hdr10";
+					note.cs = "pq-p2020";
+					break;
+				case DXGI_COLOR_SPACE_RGB_STUDIO_G2084_NONE_P2020:
+					note.hdr = "hdr10";
+					note.cs = "studio-pq-p2020";
+					break;
+				case DXGI_COLOR_SPACE_RGB_STUDIO_G22_NONE_P709:
+					note.hdr = "sdr";
+					note.cs = "studio-g22-p709";
+					break;
+				default:
+					note.hdr = "other";
+					note.cs = "other";
+					break;
+				}
+			}
+			output6->Release();
+		}
+		output->Release();
+		break;
+	}
+	if (adapter) {
+		adapter->Release();
+	}
+	factory->Release();
+#endif // Q_OS_WIN
+	return note;
+}
+
+void LogSkip(
+		DebugGate &gate,
+		const char *reason,
+		RtxVsrSize source,
+		QSize target,
+		FrameFormat format,
+		int avPixelFormat,
+		RtxVsrPath path,
+		quint64 videoTag,
+		quint64 owner,
+		const DesktopColorNote &desktop) {
+	if (gate.have && gate.reason == reason && gate.video == videoTag) {
+		return;
+	}
+	gate.have = true;
+	gate.reason = reason;
+	gate.video = videoTag;
+	const auto &shown = Presentation();
+	LOG(("VSR Debug: skip reason=%1 source=%2x%3 format=%4 pix=%5"
+		" target=%6x%7 thread=%8 owner=%9 path=%10"
+		" hdr=%11 swap=%12 cs=%13 bits=%14 desk=%15x%16"
+		" shown=%17x%18 dpr=%19"
+		).arg(reason
+		).arg(source.width
+		).arg(source.height
+		).arg(FrameFormatName(format)
+		).arg(avPixelFormat
+		).arg(target.width()
+		).arg(target.height()
+		).arg(CurrentThread()
+		).arg(owner
+		).arg(PathName(path)
+		).arg(desktop.hdr
+		).arg(shown.swap
+		).arg(desktop.cs
+		).arg(desktop.bits
+		).arg(desktop.width
+		).arg(desktop.height
+		).arg(shown.width
+		).arg(shown.height
+		).arg(double(shown.dpr), 0, 'f', 2));
+}
+
+void LogUpscale(
+		DebugGate &gate,
+		RtxVsrSize source,
+		RtxVsrSize output,
+		FrameFormat format,
+		int avPixelFormat,
+		RtxVsrPath path,
+		quint64 videoTag,
+		const DesktopColorNote &desktop) {
+	if (gate.have
+		&& gate.video == videoTag
+		&& gate.sourceWidth == source.width
+		&& gate.sourceHeight == source.height
+		&& gate.outputWidth == output.width
+		&& gate.outputHeight == output.height) {
+		return;
+	}
+	gate.have = true;
+	gate.video = videoTag;
+	gate.reason = "upscaled";
+	gate.sourceWidth = source.width;
+	gate.sourceHeight = source.height;
+	gate.outputWidth = output.width;
+	gate.outputHeight = output.height;
+	const auto &shown = Presentation();
+	LOG(("VSR Debug: upscaled source=%1x%2 output=%3x%4 format=%5 pix=%6"
+		" path=%7 hdr=%8 swap=%9 cs=%10 bits=%11 desk=%12x%13"
+		" shown=%14x%15 dpr=%16"
+		).arg(source.width
+		).arg(source.height
+		).arg(output.width
+		).arg(output.height
+		).arg(FrameFormatName(format)
+		).arg(avPixelFormat
+		).arg(PathName(path)
+		).arg(desktop.hdr
+		).arg(shown.swap
+		).arg(desktop.cs
+		).arg(desktop.bits
+		).arg(desktop.width
+		).arg(desktop.height
+		).arg(shown.width
+		).arg(shown.height
+		).arg(double(shown.dpr), 0, 'f', 2));
+}
 
 #if defined Q_OS_WIN
 
@@ -70,8 +306,11 @@ public:
 	void noteToggledOn() {
 		_session = ResetRtxVsrSession();
 		_rejectAtOrAbove = 0;
+		_rejectSource = {};
 		_cache = Cache();
 		_loggedFailure = false;
+		_skipGate = {};
+		_upscaleGate = {};
 		if (_supported == Support::No) {
 			_supported = Support::Unknown;
 		}
@@ -79,43 +318,85 @@ public:
 
 	[[nodiscard]] QImage upscale(
 			const FrameWithInfo &frame,
-			QSize targetPixels) {
-		if (!onOwnerThread()
-			|| frame.alpha
-			|| frame.index < 0
-			|| RtxVsrBlocked(_session)
-			|| targetPixels.isEmpty()) {
-			return {};
+			QSize targetPixels,
+			RtxVsrPath path,
+			quint64 videoTag) {
+		auto source = extract(frame);
+		source.size = RtxEvenSize(source.size);
+		const auto skip = [&](const char *reason) {
+			LogSkip(
+				_skipGate,
+				reason,
+				source.size,
+				targetPixels,
+				frame.format,
+				frame.avPixelFormat,
+				path,
+				videoTag,
+				quint64(_thread),
+				DesktopColor());
+			return QImage();
+		};
+		if (!onOwnerThread()) {
+			return skip("thread");
 		}
-		const auto source = extract(frame);
-		if (!source.token) {
-			return {};
+		if (frame.alpha) {
+			return skip("alpha");
+		}
+		if (frame.index < 0) {
+			return skip("bad-index");
+		}
+		if (RtxVsrBlocked(_session)) {
+			return skip("blocked");
+		}
+		if (targetPixels.isEmpty()) {
+			return skip("empty-target");
+		}
+		if (!source.token || source.size.isEmpty()) {
+			return skip("no-frame");
+		}
+		if (!(_rejectSource == source.size)) {
+			_rejectAtOrAbove = 0;
+			_rejectSource = source.size;
 		}
 		if (_cache.valid
 			&& _cache.index == frame.index
 			&& _cache.token == source.token
 			&& _cache.targetWidth == targetPixels.width()
 			&& _cache.targetHeight == targetPixels.height()) {
+			if (_cache.image.isNull()) {
+				return skip("cached-empty");
+			}
 			return _cache.image;
+		}
+		const auto sizeReason = RtxVsrRejectReasonFor(
+			source.size,
+			{ targetPixels.width(), targetPixels.height() });
+		if (sizeReason != RtxVsrRejectReason::None) {
+			return skip(RtxVsrRejectReasonName(sizeReason));
 		}
 		const auto outputs = RtxVsrOutputs(
 			source.size,
 			{ targetPixels.width(), targetPixels.height() });
 		if (!outputs.count) {
-			return {};
+			return skip("no-output");
 		}
 		if (!supported()) {
-			return {};
+			return skip("unsupported");
 		}
 
 		auto image = QImage();
 		auto failedEdge = 0;
+		auto tried = 0;
+		auto skipped = 0;
 		for (auto i = 0; i != outputs.count; ++i) {
 			const auto size = outputs.sizes[i];
 			const auto edge = RtxLongEdge(size);
 			if (_rejectAtOrAbove && edge >= _rejectAtOrAbove) {
+				++skipped;
 				continue;
 			}
+			++tried;
 			const auto attempt = trySize(source, size);
 			if (attempt.kind == AttemptKind::Done) {
 				if (failedEdge) {
@@ -131,14 +412,30 @@ public:
 			if (attempt.kind == AttemptKind::Stop) {
 				remember(frame, source.token, targetPixels, QImage());
 				finish(RtxVsrBackendResult::Unsupported);
-				return {};
+				return skip("driver-rejected");
 			}
 			failedEdge = edge;
 		}
 		if (image.isNull()) {
+			if (!tried && skipped) {
+				return skip("reject-latch");
+			}
 			finish(RtxVsrBackendResult::Failed);
+			skip("backend-failed");
 		} else {
 			finish(RtxVsrBackendResult::Ok);
+			LogUpscale(
+				_upscaleGate,
+				source.size,
+				{
+					image.width(),
+					image.height(),
+				},
+				frame.format,
+				frame.avPixelFormat,
+				path,
+				videoTag,
+				DesktopColor());
 		}
 		remember(frame, source.token, targetPixels, image);
 		return image;
@@ -657,23 +954,23 @@ private:
 		if (!yuv || !yuv->y.data || !yuv->u.data) {
 			wrote = false;
 		} else if (!source.planar) {
-			if (stride >= yuv->size.width()
-				&& yuv->y.stride >= yuv->size.width()
-				&& yuv->u.stride >= yuv->size.width()) {
-				for (auto row = 0; row != yuv->size.height(); ++row) {
+			if (stride >= source.size.width
+				&& yuv->y.stride >= source.size.width
+				&& yuv->u.stride >= source.size.width) {
+				for (auto row = 0; row != source.size.height; ++row) {
 					std::memcpy(
 						dest + (std::size_t(row) * stride),
 						static_cast<const unsigned char *>(yuv->y.data)
 							+ (std::size_t(row) * yuv->y.stride),
-						yuv->size.width());
+						source.size.width);
 				}
-				auto *uv = dest + (std::size_t(stride) * yuv->size.height());
-				for (auto row = 0; row != (yuv->size.height() / 2); ++row) {
+				auto *uv = dest + (std::size_t(stride) * source.size.height);
+				for (auto row = 0; row != (source.size.height / 2); ++row) {
 					std::memcpy(
 						uv + (std::size_t(row) * stride),
 						static_cast<const unsigned char *>(yuv->u.data)
 							+ (std::size_t(row) * yuv->u.stride),
-						yuv->size.width());
+						source.size.width);
 				}
 				wrote = true;
 			}
@@ -685,8 +982,8 @@ private:
 				yuv->u.stride,
 				static_cast<const unsigned char *>(yuv->v.data),
 				yuv->v.stride,
-				yuv->size.width(),
-				yuv->size.height(),
+				source.size.width,
+				source.size.height,
 				dest,
 				stride);
 		}
@@ -721,12 +1018,14 @@ private:
 		}
 		const auto stride = int(mapped.RowPitch);
 		auto *dest = static_cast<unsigned char *>(mapped.pData);
-		const auto widthBytes = image.width() * 4;
-		if (stride < widthBytes) {
+		const auto widthBytes = source.size.width * 4;
+		if (stride < widthBytes
+			|| image.width() < source.size.width
+			|| image.height() < source.size.height) {
 			_context->Unmap(_inputStaging.Get(), 0);
 			return false;
 		}
-		for (auto row = 0; row != image.height(); ++row) {
+		for (auto row = 0; row != source.size.height; ++row) {
 			std::memcpy(
 				dest + (std::size_t(row) * stride),
 				image.constScanLine(row),
@@ -893,7 +1192,10 @@ private:
 	Support _supported = Support::Unknown;
 	RtxVsrSession _session;
 	int _rejectAtOrAbove = 0;
+	RtxVsrSize _rejectSource;
 	DWORD _thread = 0;
+	DebugGate _skipGate;
+	DebugGate _upscaleGate;
 	bool _loggedActive = false;
 	bool _loggedFailure = false;
 	InputKind _kind = InputKind::None;
@@ -961,19 +1263,55 @@ void RtxVideoSuperResolutionNoteToggled(bool enabled) {
 #endif // Q_OS_WIN
 }
 
+void RtxNotePresentation(
+		const char *swapFormat,
+		int pixelWidth,
+		int pixelHeight,
+		float devicePixelRatio) {
+	auto &note = Presentation();
+	note.swap = swapFormat ? swapFormat : "unknown";
+	note.width = pixelWidth;
+	note.height = pixelHeight;
+	note.dpr = devicePixelRatio;
+}
+
 QImage RtxSuperResolvedImage(
 		const FrameWithInfo &frame,
-		QSize targetPixels) {
-	if (frame.format == FrameFormat::None || targetPixels.isEmpty()) {
-		return {};
+		QSize targetPixels,
+		RtxVsrPath path,
+		quint64 videoTag) {
+	static auto gate = DebugGate();
+	const auto skip = [&](const char *reason) {
+		LogSkip(
+			gate,
+			reason,
+			{},
+			targetPixels,
+			frame.format,
+			frame.avPixelFormat,
+			path,
+			videoTag,
+			0,
+			DesktopColor());
+		return QImage();
+	};
+	if (frame.format == FrameFormat::None) {
+		return skip("bad-format");
 	}
 #if defined Q_OS_WIN
 	if (!RtxVideoSuperResolutionEnabled()) {
-		return {};
+		return skip("disabled");
 	}
-	return Processor::Instance().upscale(frame, targetPixels);
+	return Processor::Instance().upscale(
+		frame,
+		targetPixels,
+		path,
+		videoTag);
 #else // Q_OS_WIN
-	return {};
+	if (targetPixels.isEmpty()) {
+		return skip("empty-target");
+	}
+	return skip("platform");
 #endif // Q_OS_WIN
 }
 

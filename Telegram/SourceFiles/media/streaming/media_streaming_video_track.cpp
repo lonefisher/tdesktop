@@ -507,6 +507,7 @@ void VideoTrackObject::rasterizeFrame(not_null<Frame*> frame) {
 				};
 				frame->alpha = false;
 				frame->format = FrameFormat::NativeTexture;
+				frame->avPixelFormat = int(hwFormat);
 				if (!frame->original.isNull()) {
 					frame->original = QImage();
 					for (auto &[_, prepared] : frame->prepared) {
@@ -534,6 +535,7 @@ void VideoTrackObject::rasterizeFrame(not_null<Frame*> frame) {
 	const auto frameWithData = frame->transferred
 		? frame->transferred.get()
 		: frame->decoded.get();
+	frame->avPixelFormat = int(frameWithData->format);
 	if ((frameWithData->format == AV_PIX_FMT_YUV420P
 		|| frameWithData->format == AV_PIX_FMT_NV12) && !requireARGB32()) {
 		const auto nv12 = (frameWithData->format == AV_PIX_FMT_NV12);
@@ -764,7 +766,11 @@ bool VideoTrackObject::processFirstFrame() {
 	if (frame.isNull()) {
 		return false;
 	}
-	_shared->init(std::move(frame), alpha, _syncTimePoint.trackTime);
+	_shared->init(
+		std::move(frame),
+		alpha,
+		_syncTimePoint.trackTime,
+		int(frameWithData->format));
 	callReady();
 	queueReadFrames();
 	return true;
@@ -861,13 +867,15 @@ void VideoTrackObject::fail(Error error) {
 void VideoTrack::Shared::init(
 		QImage &&cover,
 		bool hasAlpha,
-		crl::time position) {
+		crl::time position,
+		int avPixelFormat) {
 	Expects(!initialized());
 
 	_frames[0].original = std::move(cover);
 	_frames[0].position = position;
 	_frames[0].format = FrameFormat::ARGB32;
 	_frames[0].alpha = hasAlpha;
+	_frames[0].avPixelFormat = avPixelFormat;
 
 	// Usually main thread sets displayed time before _counter increment.
 	// But in this case we update _counter, so we set a fake displayed time.
@@ -1266,6 +1274,7 @@ FrameWithInfo VideoTrack::frameWithInfo(
 		.image = frameImage(data.frame, request, instance),
 		.format = FrameFormat::ARGB32,
 		.index = data.index,
+		.avPixelFormat = data.frame->avPixelFormat,
 	};
 }
 
@@ -1287,6 +1296,7 @@ FrameWithInfo VideoTrack::frameWithInfo(const Instance *instance) {
 		.format = data.frame->format,
 		.index = data.index,
 		.alpha = data.frame->alpha,
+		.avPixelFormat = data.frame->avPixelFormat,
 	};
 }
 
@@ -1298,7 +1308,6 @@ QImage VideoTrack::superResolvedFrame(
 			_vsrPrepared = QImage();
 			_vsrIndex = -1;
 		}
-		return {};
 	}
 	if (_vsrIndex == frame->index
 		&& _vsrRequest == request
@@ -1306,9 +1315,6 @@ QImage VideoTrack::superResolvedFrame(
 		return _vsrPrepared;
 	}
 	const auto target = RtxRequestTarget(request, _streamRotation);
-	if (target.isEmpty()) {
-		return {};
-	}
 	const auto yuv = ((frame->format == FrameFormat::YUV420)
 			|| (frame->format == FrameFormat::NV12))
 		? &frame->yuv
@@ -1320,8 +1326,11 @@ QImage VideoTrack::superResolvedFrame(
 			.format = frame->format,
 			.index = frame->index,
 			.alpha = frame->alpha,
+			.avPixelFormat = frame->avPixelFormat,
 		},
-		target);
+		target,
+		RtxVsrPath::Track,
+		quint64(reinterpret_cast<quintptr>(this)));
 	if (upscaled.isNull()) {
 		return {};
 	}
