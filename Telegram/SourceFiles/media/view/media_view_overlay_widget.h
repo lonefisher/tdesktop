@@ -17,6 +17,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "data/data_web_page.h"
 #include "data/data_cloud_themes.h" // Data::CloudTheme.
 #include "media/stories/media_stories_delegate.h"
+#include "media/streaming/media_streaming_rtx_fg_plan.h"
 #include "media/view/media_view_playback_controls.h"
 #include "media/view/media_view_open_common.h"
 #include "media/view/media_view_recognition_selection.h"
@@ -454,6 +455,8 @@ private:
 		std::optional<QPoint> anchor = std::nullopt);
 
 	void updatePlaybackState();
+	void scheduleFrameGeneration();
+	[[nodiscard]] Streaming::RtxFgPlan frameGenerationPlan() const;
 	void refreshSystemMediaControls();
 	void finishSystemMediaControls();
 	[[nodiscard]] QImage systemMediaControlsThumbnail() const;
@@ -872,6 +875,8 @@ private:
 	Ui::Animations::Simple _speedBoostAnimation;
 	base::Timer _speedBoostHoldTimer;
 	base::Timer _frameStepThrottle;
+	base::Timer _frameGenerationTimer;
+	crl::time _fgWaitSince = 0;
 	int _frameStepPending = 0;
 	Ui::Animations::Basic _speedBoostTicker;
 	float64 _speedBoostPhase = 0.;

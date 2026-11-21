@@ -31,6 +31,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "info/downloads/info_downloads_widget.h"
 #include "info/info_memento.h"
 #include "lang/lang_keys.h"
+#include "media/streaming/media_streaming_rtx_fg.h"
 #include "media/streaming/media_streaming_rtx_vsr.h"
 #include "main/main_account.h"
 #include "main/main_domain.h"
@@ -990,6 +991,38 @@ void BuildPerformanceSection(SectionBuilder &builder) {
 			}, vsr->lifetime());
 		}
 		builder.addDividerText(tr::lng_fishgram_rtx_vsr_about());
+
+		const auto fgPref = Media::Streaming::kRtxVideoFrameGenerationPref;
+		const auto fg = builder.addButton({
+			.id = u"advanced/rtx_fg"_q,
+			.title = tr::lng_fishgram_rtx_fg(),
+			.st = &st::settingsButtonNoIcon,
+			.toggled = rpl::single(
+				Core::App().settings().readPref<bool>(
+					fgPref,
+					Media::Streaming::kRtxVideoFrameGenerationDefault)),
+			.keywords = {
+				u"nvidia"_q,
+				u"rtx"_q,
+				u"frame generation"_q,
+				u"interpolation"_q,
+				u"video"_q,
+			},
+		});
+		if (fg) {
+			fg->toggledValue(
+			) | rpl::filter([=](bool enabled) {
+				return enabled
+					!= Core::App().settings().readPref<bool>(
+						fgPref,
+						Media::Streaming::kRtxVideoFrameGenerationDefault);
+			}) | rpl::on_next([=](bool enabled) {
+				Core::App().settings().writePref<bool>(fgPref, enabled);
+				Core::App().saveSettingsDelayed();
+				Media::Streaming::RtxVideoFrameGenerationNoteToggled(enabled);
+			}, fg->lifetime());
+		}
+		builder.addDividerText(tr::lng_fishgram_rtx_fg_about());
 	}
 
 #ifdef DESKTOP_APP_USE_ANGLE

@@ -928,6 +928,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 "lng_settings_enable_hwaccel" = "Hardware accelerated video decoding";
 "lng_fishgram_rtx_vsr" = "NVIDIA RTX video super resolution";
 "lng_fishgram_rtx_vsr_about" = "On supported NVIDIA GPUs, this follows the video super resolution setting in the NVIDIA app. Turn it off here to keep normal playback. If the driver cannot enable it, playback stays the same.";
+"lng_fishgram_rtx_fg" = "NVIDIA video frame generation";
+"lng_fishgram_rtx_fg_about" = "In fullscreen or a large media-viewer window, playback can add frames up to the display refresh rate. This is NVIDIA Video Frame Generation, and it can run together with super resolution. It stays off until you turn it on. Playback is unchanged when the GPU or the Video Effects runtime cannot do it.";
 "lng_settings_enable_opengl" = "Enable OpenGL rendering for media";
 "lng_settings_angle_backend" = "ANGLE graphics backend";
 "lng_settings_angle_backend_auto" = "Auto";

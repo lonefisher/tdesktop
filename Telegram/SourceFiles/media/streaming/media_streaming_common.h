@@ -209,5 +209,18 @@ struct FrameWithInfo {
 	bool alpha = false;
 };
 
+struct InterpolationAnchors {
+	bool valid = false;
+	int previousIndex = -1;
+	int nextIndex = -1;
+	crl::time previousDisplay = kTimeUnknown;
+	crl::time nextDisplay = kTimeUnknown;
+	crl::time previousPosition = kTimeUnknown;
+	crl::time nextPosition = kTimeUnknown;
+	bool alpha = false;
+	QImage previous;
+	QImage next;
+};
+
 } // namespace Streaming
 } // namespace Media
