@@ -95,6 +95,7 @@ private:
 
 		int index = 0;
 		bool alpha = false;
+		bool sourceHdr = false;
 	};
 	struct FrameWithIndex {
 		not_null<Frame*> frame;

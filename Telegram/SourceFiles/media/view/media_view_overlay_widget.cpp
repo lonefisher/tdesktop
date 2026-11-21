@@ -1527,7 +1527,8 @@ bool OverlayWidget::streamingRequiresControls() const {
 QImage OverlayWidget::videoFrame() const {
 	Expects(videoShown());
 
-	if (Streaming::RtxVideoSuperResolutionEnabled()) {
+	if (Streaming::RtxVideoSuperResolutionEnabled()
+		|| Streaming::RtxVideoHdrEnabled()) {
 		const auto info = videoFrameWithInfo();
 		if (info.format == Streaming::FrameFormat::ARGB32
 			&& !info.yuv
@@ -1555,7 +1556,9 @@ Streaming::FrameWithInfo OverlayWidget::videoFrameWithInfo() const {
 			.index = -2,
 			.alpha = _streamed->instance.info().video.alpha,
 		};
-	if (!Streaming::RtxVideoSuperResolutionEnabled()) {
+	const auto vsr = Streaming::RtxVideoSuperResolutionEnabled();
+	const auto hdr = Streaming::RtxVideoHdrEnabled();
+	if (!vsr && !hdr) {
 		return info;
 	}
 	// contentGeometry() already stores the unrotated frame rectangle.
@@ -1564,7 +1567,62 @@ Streaming::FrameWithInfo OverlayWidget::videoFrameWithInfo() const {
 	const auto target = QSize(
 		int(std::ceil(geometry.rect.width() * ratio)),
 		int(std::ceil(geometry.rect.height() * ratio)));
-	return Streaming::WithRtxSuperResolution(std::move(info), target);
+	auto request = Streaming::RtxEnhanceRequest{
+		.targetPixels = target,
+		.videoTag = quint64(streamedIndex()),
+		.rotation = int(std::lround(geometry.rotation)),
+	};
+#if defined Q_OS_WIN
+	const auto top = widget()->window();
+	const auto placed = geometry.rect.toRect();
+	const auto logical = QRect(
+		widget()->mapTo(top, placed.topLeft()),
+		placed.size());
+	request.windowId = quintptr(top->winId());
+	request.videoScreenPx = Streaming::RtxScreenRect(
+		request.windowId,
+		logical,
+		top->devicePixelRatioF());
+	if (_controlsOpacity.current() > 0.02) {
+		auto holes = QRegion();
+		const auto add = [&](QRect rect) {
+			if (!rect.isEmpty()) {
+				holes += rect;
+			}
+		};
+		add(_bottomShadowRect);
+		add(_topShadowRect);
+		add(footerGeometry());
+		add(_captionRect);
+		add(_groupThumbsRect);
+		add(_leftNavOver);
+		add(_rightNavOver);
+		add(_saveNavOver);
+		add(_shareNavOver);
+		add(_rotateNavOver);
+		add(_moreNavOver);
+		add(_drawNavOver);
+		add(_recognizeNavOver);
+		add(_headerNav);
+		add(_nameNav);
+		add(_dateNav);
+		if (_streamed
+			&& _streamed->controls
+			&& !_streamed->controls->isHidden()) {
+			add(_streamed->controls->geometry());
+		}
+		const auto origin = widget()->mapTo(top, QPoint());
+		auto screenHoles = QRegion();
+		for (const auto &rect : holes) {
+			screenHoles += Streaming::RtxScreenRect(
+				request.windowId,
+				rect.translated(origin),
+				top->devicePixelRatioF());
+		}
+		request.controlHoles = screenHoles;
+	}
+#endif // Q_OS_WIN
+	return Streaming::WithRtxEnhanced(std::move(info), request);
 }
 
 QImage OverlayWidget::currentVideoFrameImage() const {
@@ -6505,6 +6563,9 @@ Ui::GL::ChosenRenderer OverlayWidget::chooseRenderer(
 }
 
 void OverlayWidget::paint(not_null<Renderer*> renderer) {
+	if (!videoShown()) {
+		Streaming::RtxHdrReleaseWindow(quintptr(widget()->window()->winId()));
+	}
 	renderer->paintBackground();
 	if (contentShown()) {
 		if (videoShown()) {

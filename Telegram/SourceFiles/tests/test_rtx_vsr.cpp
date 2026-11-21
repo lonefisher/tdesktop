@@ -209,6 +209,134 @@ void TestPackAndBlank() {
 	Check(!RtxOutputRejectedAsBlank(200, 1), "visible output kept");
 }
 
+void TestHdrPlan() {
+	Check(
+		std::string(kRtxVideoHdrPref) == "fishgram/rtx_video_hdr",
+		"hdr pref key");
+	Check(kRtxVideoHdrDefault, "hdr default follows the driver");
+	Check(
+		RtxBoolPrefEnabled(false, false, kRtxVideoHdrDefault),
+		"missing hdr pref stays on");
+	Check(
+		!RtxBoolPrefEnabled(true, false, kRtxVideoHdrDefault),
+		"stored hdr off stays off");
+	Check(
+		RtxBoolPrefEnabled(true, true, kRtxVideoHdrDefault),
+		"stored hdr on stays on");
+
+	const auto apply = PlanRtxVideoHdr(
+		RtxBoolPrefEnabled(false, false, kRtxVideoHdrDefault),
+		true,
+		false,
+		true,
+		false,
+		false,
+		false);
+	Check(apply.decision == RtxHdrDecision::ToneMap, "sdr on hdr display");
+	Check(
+		RtxHdrSkipReasonFor(true, true, false, true, false, false, false)
+			== RtxHdrSkipReason::None,
+		"hdr reason none");
+
+	const auto sameSize = PlanRtxVideoHdr(
+		true, true, false, true, false, false, false);
+	Check(
+		sameSize.decision == RtxHdrDecision::ToneMap,
+		"hdr does not need an upscale");
+
+	const auto off = PlanRtxVideoHdr(
+		RtxBoolPrefEnabled(true, false, kRtxVideoHdrDefault),
+		true,
+		false,
+		true,
+		false,
+		false,
+		false);
+	Check(off.decision == RtxHdrDecision::Skip, "hdr off skips");
+	Check(
+		RtxHdrSkipReasonFor(false, true, false, true, false, false, false)
+			== RtxHdrSkipReason::Disabled,
+		"disabled wins");
+
+	Check(
+		PlanRtxVideoHdr(true, false, false, true, false, false, false)
+			.decision == RtxHdrDecision::Skip,
+		"hdr unsupported skips");
+	Check(
+		RtxHdrSkipReasonFor(true, false, false, true, false, false, false)
+			== RtxHdrSkipReason::Unsupported,
+		"unsupported reason");
+
+	Check(
+		PlanRtxVideoHdr(true, true, true, true, false, false, false)
+			.decision == RtxHdrDecision::Skip,
+		"hdr blocked skips");
+	Check(
+		RtxHdrSkipReasonFor(true, true, true, true, false, false, false)
+			== RtxHdrSkipReason::Blocked,
+		"blocked reason");
+
+	Check(
+		PlanRtxVideoHdr(true, true, false, false, false, false, false)
+			.decision == RtxHdrDecision::Skip,
+		"sdr display skips");
+	Check(
+		RtxHdrSkipReasonFor(true, true, false, false, false, false, false)
+			== RtxHdrSkipReason::DisplaySdr,
+		"display-sdr reason");
+
+	Check(
+		PlanRtxVideoHdr(true, true, false, true, true, false, false)
+			.decision == RtxHdrDecision::Skip,
+		"hdr source skips");
+	Check(
+		RtxHdrSkipReasonFor(true, true, false, true, true, false, false)
+			== RtxHdrSkipReason::SourceHdr,
+		"source-hdr reason");
+
+	Check(
+		PlanRtxVideoHdr(true, true, false, true, false, true, false)
+			.decision == RtxHdrDecision::Skip,
+		"rotated skips");
+	Check(
+		RtxHdrSkipReasonFor(true, true, false, true, false, true, false)
+			== RtxHdrSkipReason::Rotated,
+		"rotated reason");
+
+	Check(
+		PlanRtxVideoHdr(true, true, false, true, false, false, true)
+			.decision == RtxHdrDecision::Skip,
+		"alpha skips hdr");
+	Check(
+		RtxHdrSkipReasonFor(true, true, false, true, false, false, true)
+			== RtxHdrSkipReason::Alpha,
+		"alpha reason");
+
+	Check(
+		std::string(RtxHdrSkipReasonName(RtxHdrSkipReason::DisplaySdr))
+			== "display-sdr",
+		"display-sdr name");
+	Check(
+		std::string(RtxHdrSkipReasonName(RtxHdrSkipReason::SourceHdr))
+			== "source-hdr",
+		"source-hdr name");
+	Check(
+		std::string(RtxHdrSkipReasonName(RtxHdrSkipReason::None)) == "none",
+		"none name");
+
+	const auto vsr = PlanRtxVideoSuperResolution(
+		true,
+		true,
+		false,
+		{ 1280, 720 },
+		{ 3840, 2160 });
+	const auto hdr = PlanRtxVideoHdr(
+		true, true, false, true, false, false, false);
+	Check(vsr.decision == RtxVsrDecision::Upscale, "vsr still upscales");
+	Check(hdr.decision == RtxHdrDecision::ToneMap, "hdr runs with vsr");
+	Check(vsr.output == RtxVsrSize{ 3840, 2160 }, "vsr size unchanged");
+}
+
 } // namespace
 
 int main() {
@@ -217,6 +345,7 @@ int main() {
 	TestFallbackList();
 	TestSession();
 	TestPackAndBlank();
+	TestHdrPlan();
 	if (Failed) {
 		std::fprintf(stderr, "%d checks failed\n", Failed);
 		return 1;
