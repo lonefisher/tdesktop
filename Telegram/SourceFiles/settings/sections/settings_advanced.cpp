@@ -992,6 +992,40 @@ void BuildPerformanceSection(SectionBuilder &builder) {
 		builder.addDividerText(tr::lng_fishgram_rtx_vsr_about());
 	}
 
+	if (Media::Streaming::RtxVideoHdrSupported()) {
+		const auto pref = Media::Streaming::kRtxVideoHdrPref;
+		const auto hdr = builder.addButton({
+			.id = u"advanced/rtx_hdr"_q,
+			.title = tr::lng_fishgram_rtx_hdr(),
+			.st = &st::settingsButtonNoIcon,
+			.toggled = rpl::single(
+				Core::App().settings().readPref<bool>(
+					pref,
+					Media::Streaming::kRtxVideoHdrDefault)),
+			.keywords = {
+				u"nvidia"_q,
+				u"rtx"_q,
+				u"hdr"_q,
+				u"truehdr"_q,
+				u"video"_q,
+			},
+		});
+		if (hdr) {
+			hdr->toggledValue(
+			) | rpl::filter([=](bool enabled) {
+				return enabled
+					!= Core::App().settings().readPref<bool>(
+						pref,
+						Media::Streaming::kRtxVideoHdrDefault);
+			}) | rpl::on_next([=](bool enabled) {
+				Core::App().settings().writePref<bool>(pref, enabled);
+				Core::App().saveSettingsDelayed();
+				Media::Streaming::RtxVideoHdrNoteToggled(enabled);
+			}, hdr->lifetime());
+		}
+		builder.addDividerText(tr::lng_fishgram_rtx_hdr_about());
+	}
+
 #ifdef DESKTOP_APP_USE_ANGLE
 	BuildANGLEOption(builder);
 #else

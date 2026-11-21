@@ -16,6 +16,8 @@ namespace Media::Streaming {
 inline constexpr auto kRtxVideoSuperResolutionPref
 	= "fishgram/rtx_video_super_resolution";
 inline constexpr auto kRtxVideoSuperResolutionDefault = true;
+inline constexpr auto kRtxVideoHdrPref = "fishgram/rtx_video_hdr";
+inline constexpr auto kRtxVideoHdrDefault = true;
 
 // Any NVIDIA adapter. Device id is intentionally not part of the check.
 inline constexpr auto kRtxNvidiaVendorId = 0x10DEu;
@@ -84,8 +86,11 @@ struct RtxVsrSession {
 }
 
 // A missing pref uses the default. An empty stored value is an explicit off.
-[[nodiscard]] inline bool RtxBoolPrefEnabled(bool present, bool nonEmpty) {
-	return present ? nonEmpty : kRtxVideoSuperResolutionDefault;
+[[nodiscard]] inline bool RtxBoolPrefEnabled(
+		bool present,
+		bool nonEmpty,
+		bool fallback = kRtxVideoSuperResolutionDefault) {
+	return present ? nonEmpty : fallback;
 }
 
 [[nodiscard]] inline bool RtxVsrBlocked(RtxVsrSession session) {
@@ -302,6 +307,96 @@ struct RtxVsrSession {
 		int sourceMax,
 		int outputMax) {
 	return (sourceMax > 16) && (outputMax == 0);
+}
+
+enum class RtxHdrDecision {
+	Skip,
+	ToneMap,
+};
+
+struct RtxHdrPlan {
+	RtxHdrDecision decision = RtxHdrDecision::Skip;
+
+};
+
+enum class RtxHdrSkipReason {
+	None,
+	Disabled,
+	Unsupported,
+	Blocked,
+	DisplaySdr,
+	SourceHdr,
+	Rotated,
+	Alpha,
+};
+
+[[nodiscard]] inline const char *RtxHdrSkipReasonName(
+		RtxHdrSkipReason reason) {
+	switch (reason) {
+	case RtxHdrSkipReason::None: return "none";
+	case RtxHdrSkipReason::Disabled: return "disabled";
+	case RtxHdrSkipReason::Unsupported: return "unsupported";
+	case RtxHdrSkipReason::Blocked: return "blocked";
+	case RtxHdrSkipReason::DisplaySdr: return "display-sdr";
+	case RtxHdrSkipReason::SourceHdr: return "source-hdr";
+	case RtxHdrSkipReason::Rotated: return "rotated";
+	case RtxHdrSkipReason::Alpha: return "alpha";
+	}
+	return "other";
+}
+
+[[nodiscard]] inline RtxHdrSkipReason RtxHdrSkipReasonFor(
+		bool enabled,
+		bool supported,
+		bool blocked,
+		bool displayHdr,
+		bool sourceHdr,
+		bool rotated,
+		bool alpha) {
+	if (!enabled) {
+		return RtxHdrSkipReason::Disabled;
+	}
+	if (!supported) {
+		return RtxHdrSkipReason::Unsupported;
+	}
+	if (blocked) {
+		return RtxHdrSkipReason::Blocked;
+	}
+	if (!displayHdr) {
+		return RtxHdrSkipReason::DisplaySdr;
+	}
+	if (sourceHdr) {
+		return RtxHdrSkipReason::SourceHdr;
+	}
+	if (rotated) {
+		return RtxHdrSkipReason::Rotated;
+	}
+	if (alpha) {
+		return RtxHdrSkipReason::Alpha;
+	}
+	return RtxHdrSkipReason::None;
+}
+
+[[nodiscard]] inline RtxHdrPlan PlanRtxVideoHdr(
+		bool enabled,
+		bool supported,
+		bool blocked,
+		bool displayHdr,
+		bool sourceHdr,
+		bool rotated,
+		bool alpha) {
+	auto plan = RtxHdrPlan();
+	if (RtxHdrSkipReasonFor(
+			enabled,
+			supported,
+			blocked,
+			displayHdr,
+			sourceHdr,
+			rotated,
+			alpha) == RtxHdrSkipReason::None) {
+		plan.decision = RtxHdrDecision::ToneMap;
+	}
+	return plan;
 }
 
 } // namespace Media::Streaming

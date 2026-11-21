@@ -298,6 +298,8 @@ jobs:
             ''
             'VSR log line, in FishGramData\log.txt:'
             'VSR Info: NVIDIA RTX video super resolution is active.'
+            'RTX HDR log line, in FishGramData\log.txt:'
+            'RTX HDR Info: NVIDIA RTX video HDR is active.'
           ) -join "`r`n"
           Set-Content -LiteralPath (Join-Path $stage 'README.txt') -Value ($readme + "`r`n") -Encoding ascii
           $bytes = (Get-ChildItem -LiteralPath $stage -Recurse -File | Measure-Object -Property Length -Sum).Sum
