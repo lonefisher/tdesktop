@@ -8816,7 +8816,9 @@ bool OverlayWidget::handleContextMenu(std::optional<QPoint> position) {
 	_menu = base::make_unique_q<Ui::PopupMenu>(
 		_window,
 		st::mediaviewPopupMenu);
-	fillContextMenuActions(Ui::Menu::CreateAddActionCallback(_menu));
+	const auto add = Ui::Menu::CreateAddActionCallback(_menu);
+	fillVideoEnhancementMenu(add);
+	fillContextMenuActions(add);
 
 	if (_menu->empty()) {
 		_menu = nullptr;
@@ -9139,15 +9141,69 @@ void OverlayWidget::receiveMouse() {
 	_receiveMouse = true;
 }
 
+void OverlayWidget::fillVideoEnhancementMenu(
+		const Ui::Menu::MenuCallback &addAction) {
+	if (!videoShown()
+		|| !Streaming::RtxVideoSuperResolutionSupported()) {
+		return;
+	}
+	addAction({
+		.text = tr::lng_fishgram_video_enhance(tr::now),
+		.handler = nullptr,
+		.fillSubmenu = [=](not_null<Ui::PopupMenu*> menu) {
+			const auto on = Streaming::RtxVideoFrameGenerationEnabled();
+			const auto text = tr::lng_fishgram_rtx_fg(tr::now)
+				+ (on ? u"\t✓"_q : QString());
+			const auto action = menu->addAction(text, [=] {
+				const auto next = !Streaming::RtxVideoFrameGenerationEnabled();
+				Core::App().settings().writePref<bool>(
+					Streaming::kRtxVideoFrameGenerationPref,
+					next);
+				Core::App().saveSettingsDelayed();
+				Streaming::RtxVideoFrameGenerationNoteToggled(next);
+				scheduleFrameGeneration();
+				update();
+			});
+			action->setEnabled(
+				Streaming::RtxVideoFrameGenerationMenuAvailable());
+		},
+		.submenuSt = &st::mediaviewPopupMenu,
+	});
+	addAction({
+		.separatorSt = &st::mediaviewMenuSeparator,
+		.isSeparator = true,
+	});
+}
+
 void OverlayWidget::showDropdown() {
-	_dropdown->clearActions();
-	fillContextMenuActions(Ui::Menu::CreateAddActionCallback(_dropdown));
-	_dropdown->moveToRight(0, height() - _dropdown->height());
-	_dropdown->showAnimated(Ui::PanelAnimation::Origin::BottomRight);
-	_dropdown->setFocus();
+	// The corner dropdown cannot host a submenu.
+	_dropdown->hideAnimated(Ui::DropdownMenu::HideOption::IgnoreShow);
+	if (_menu) {
+		_menu->hideMenu(true);
+	}
+	_menu = base::make_unique_q<Ui::PopupMenu>(
+		_window,
+		st::mediaviewPopupMenu);
+	const auto add = Ui::Menu::CreateAddActionCallback(_menu);
+	fillVideoEnhancementMenu(add);
+	fillContextMenuActions(add);
+	if (_menu->empty()) {
+		_menu = nullptr;
+		return;
+	}
 	if (_stories) {
 		_stories->menuShown(true);
 	}
+	_menu->setDestroyedCallback(crl::guard(_widget, [=] {
+		if (_stories) {
+			_stories->menuShown(false);
+		}
+		activateControls();
+		_receiveMouse = false;
+		InvokeQueued(_widget, [=] { receiveMouse(); });
+	}));
+	_menu->popup(QCursor::pos());
+	activateControls();
 }
 
 void OverlayWidget::handleTouchTimer() {

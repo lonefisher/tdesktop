@@ -997,10 +997,7 @@ void BuildPerformanceSection(SectionBuilder &builder) {
 			.id = u"advanced/rtx_fg"_q,
 			.title = tr::lng_fishgram_rtx_fg(),
 			.st = &st::settingsButtonNoIcon,
-			.toggled = rpl::single(
-				Core::App().settings().readPref<bool>(
-					fgPref,
-					Media::Streaming::kRtxVideoFrameGenerationDefault)),
+			.toggled = Media::Streaming::RtxVideoFrameGenerationEnabledValue(),
 			.keywords = {
 				u"nvidia"_q,
 				u"rtx"_q,

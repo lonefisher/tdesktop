@@ -457,6 +457,7 @@ private:
 	void updatePlaybackState();
 	void scheduleFrameGeneration();
 	[[nodiscard]] Streaming::RtxFgPlan frameGenerationPlan() const;
+	void fillVideoEnhancementMenu(const Ui::Menu::MenuCallback &addAction);
 	void refreshSystemMediaControls();
 	void finishSystemMediaControls();
 	[[nodiscard]] QImage systemMediaControlsThumbnail() const;

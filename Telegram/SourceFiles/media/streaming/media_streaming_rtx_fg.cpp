@@ -20,6 +20,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "core/application.h"
 #include "core/core_settings.h"
 #include "logs.h"
+#include "rpl/event_stream.h"
 
 #include <QtCore/QCoreApplication>
 #include <QtCore/QDir>
@@ -304,6 +305,13 @@ public:
 
 	[[nodiscard]] bool blocked() const {
 		return RtxFgBlocked(_session);
+	}
+
+	[[nodiscard]] bool menuAvailable() {
+		if (_supported == Support::No) {
+			_supported = Support::Unknown;
+		}
+		return supported() && !blocked();
 	}
 
 	[[nodiscard]] bool supported() {
@@ -629,6 +637,11 @@ bool &EnabledLatch() {
 
 #endif // Q_OS_WIN
 
+rpl::event_stream<bool> &EnabledChanges() {
+	static auto stream = rpl::event_stream<bool>();
+	return stream;
+}
+
 } // namespace
 
 bool RtxVideoFrameGenerationEnabled() {
@@ -644,9 +657,23 @@ bool RtxVideoFrameGenerationEnabled() {
 	return enabled;
 }
 
+rpl::producer<bool> RtxVideoFrameGenerationEnabledValue() {
+	return rpl::single(
+		RtxVideoFrameGenerationEnabled()
+	) | rpl::then(EnabledChanges().events());
+}
+
 bool RtxVideoFrameGenerationSupported() {
 #if defined Q_OS_WIN
 	return Generator::Instance().supported();
+#else // Q_OS_WIN
+	return false;
+#endif // Q_OS_WIN
+}
+
+bool RtxVideoFrameGenerationMenuAvailable() {
+#if defined Q_OS_WIN
+	return Generator::Instance().menuAvailable();
 #else // Q_OS_WIN
 	return false;
 #endif // Q_OS_WIN
@@ -665,12 +692,13 @@ void RtxVideoFrameGenerationNoteToggled(bool enabled) {
 #if defined Q_OS_WIN
 		EnabledLatch() = false;
 #endif // Q_OS_WIN
-		return;
-	}
+	} else {
 #if defined Q_OS_WIN
-	Generator::Instance().noteToggledOn();
-	EnabledLatch() = true;
+		Generator::Instance().noteToggledOn();
+		EnabledLatch() = true;
 #endif // Q_OS_WIN
+	}
+	EnabledChanges().fire_copy(enabled);
 }
 
 void RtxFrameGenerationNoteClip(std::uintptr_t clip) {

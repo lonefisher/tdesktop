@@ -8,6 +8,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #pragma once
 
 #include "media/streaming/media_streaming_rtx_fg_plan.h"
+#include "rpl/producer.h"
 
 #include <cstdint>
 
@@ -16,7 +17,9 @@ class QImage;
 namespace Media::Streaming {
 
 [[nodiscard]] bool RtxVideoFrameGenerationEnabled();
+[[nodiscard]] rpl::producer<bool> RtxVideoFrameGenerationEnabledValue();
 [[nodiscard]] bool RtxVideoFrameGenerationSupported();
+[[nodiscard]] bool RtxVideoFrameGenerationMenuAvailable();
 [[nodiscard]] bool RtxFrameGenerationBlocked();
 void RtxVideoFrameGenerationNoteToggled(bool enabled);
 void RtxFrameGenerationNoteClip(std::uintptr_t clip);
