@@ -930,6 +930,12 @@ FrameWithInfo Player::frameWithInfo(const Instance *instance) const {
 	return _video->frameWithInfo(instance);
 }
 
+InterpolationAnchors Player::interpolationAnchors() const {
+	Expects(_video != nullptr);
+
+	return _video->interpolationAnchors();
+}
+
 QImage Player::currentFrameImage() const {
 	Expects(_video != nullptr);
 
