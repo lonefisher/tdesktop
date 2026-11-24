@@ -62,6 +62,7 @@ public:
 		const FrameRequest &request,
 		const Instance *instance);
 	[[nodiscard]] FrameWithInfo frameWithInfo(const Instance *instance);
+	[[nodiscard]] InterpolationAnchors interpolationAnchors();
 	[[nodiscard]] QImage currentFrameImage();
 	void unregisterInstance(not_null<const Instance*> instance);
 	[[nodiscard]] rpl::producer<> checkNextFrame() const;
@@ -145,6 +146,12 @@ private:
 		[[nodiscard]] crl::time nextFrameDisplayTime() const;
 		[[nodiscard]] not_null<Frame*> frameForPaint();
 		[[nodiscard]] FrameWithIndex frameForPaintWithIndex();
+		struct InterpolationPeek {
+			bool valid = false;
+			Frame *previous = nullptr;
+			Frame *next = nullptr;
+		};
+		[[nodiscard]] InterpolationPeek interpolationPeek();
 
 	private:
 		[[nodiscard]] not_null<Frame*> getFrame(int index);

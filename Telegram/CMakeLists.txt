@@ -76,6 +76,7 @@ include(cmake/test_iv_editor_table_grid.cmake)
 include(cmake/test_wallet_card_tint.cmake)
 include(cmake/test_wallet_phrase_shares.cmake)
 include(cmake/test_rtx_vsr.cmake)
+include(cmake/test_rtx_fg.cmake)
 
 set_target_properties(Telegram PROPERTIES AUTOMOC ON)
 
@@ -1664,6 +1665,9 @@ PRIVATE
     media/streaming/media_streaming_reader.h
     media/streaming/media_streaming_round_preview.cpp
     media/streaming/media_streaming_round_preview.h
+    media/streaming/media_streaming_rtx_fg.cpp
+    media/streaming/media_streaming_rtx_fg.h
+    media/streaming/media_streaming_rtx_fg_plan.h
     media/streaming/media_streaming_rtx_vsr.cpp
     media/streaming/media_streaming_rtx_vsr.h
     media/streaming/media_streaming_rtx_vsr_plan.h

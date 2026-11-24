@@ -71,6 +71,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "media/stories/media_stories_view.h"
 #include "media/streaming/media_streaming_document.h"
 #include "media/streaming/media_streaming_player.h"
+#include "media/streaming/media_streaming_rtx_fg.h"
 #include "media/streaming/media_streaming_rtx_vsr.h"
 #include "media/view/media_view_video_enhance.h"
 #include "media/player/media_player_instance.h"
@@ -722,6 +723,11 @@ OverlayWidget::OverlayWidget()
 	_frameStepThrottle.setCallback([=] {
 		flushPendingFrameStep();
 	});
+	_frameGenerationTimer.setCallback([=] {
+		if (_streamed && videoShown()) {
+			update();
+		}
+	});
 
 	_docRectImage = QImage(
 		st::mediaviewFileSize * style::DevicePixelRatio(),
@@ -1008,6 +1014,11 @@ OverlayWidget::OverlayWidget()
 	) | rpl::skip(1) | rpl::on_next(repaintVideo, lifetime());
 	Streaming::RtxVideoHdrEnabledValue(
 	) | rpl::skip(1) | rpl::on_next(repaintVideo, lifetime());
+	Streaming::RtxVideoFrameGenerationEnabledValue(
+	) | rpl::skip(1) | rpl::on_next([=](bool) {
+		scheduleFrameGeneration();
+		repaintVideo(false);
+	}, lifetime());
 
 	orderWidgets();
 }
@@ -1539,7 +1550,8 @@ QImage OverlayWidget::videoFrame() const {
 	Expects(videoShown());
 
 	if (Streaming::RtxVideoSuperResolutionEnabled()
-		|| Streaming::RtxVideoHdrEnabled()) {
+		|| Streaming::RtxVideoHdrEnabled()
+		|| Streaming::RtxVideoFrameGenerationEnabled()) {
 		const auto info = videoFrameWithInfo();
 		if (info.format == Streaming::FrameFormat::ARGB32
 			&& !info.yuv
@@ -1568,6 +1580,27 @@ Streaming::FrameWithInfo OverlayWidget::videoFrameWithInfo(
 			.index = -2,
 			.alpha = _streamed->instance.info().video.alpha,
 		};
+	// Order: frame generation on the decoded picture, then VSR and HDR
+	// together. A generated frame is the picture those two enhance.
+	const auto generated = frameGenerationPlan();
+	if (generated.decision == Streaming::RtxFgDecision::Interpolate) {
+		const auto anchors = _streamed->instance.interpolationAnchors();
+		auto image = Streaming::RtxGeneratedFrame(
+			anchors.previous,
+			anchors.next,
+			generated.timestep);
+		if (!image.isNull()) {
+			info.image = std::move(image);
+			info.yuv = nullptr;
+			info.nativeFrame = nullptr;
+			info.format = Streaming::FrameFormat::ARGB32;
+			info.alpha = false;
+			info.avPixelFormat = -1;
+			if (info.index < 0) {
+				info.index = anchors.previousIndex;
+			}
+		}
+	}
 	// contentGeometry() already stores the unrotated frame rectangle.
 	// The painted size is that rectangle times the widget's device ratio.
 	const auto geometry = contentGeometry();
@@ -1638,6 +1671,65 @@ Streaming::FrameWithInfo OverlayWidget::videoFrameWithInfo(
 	return Streaming::WithRtxEnhanced(std::move(info), request);
 }
 
+Streaming::RtxFgPlan OverlayWidget::frameGenerationPlan() const {
+	auto clock = Streaming::RtxFgClock();
+	clock.enabled = Streaming::RtxVideoFrameGenerationEnabled();
+	if (!clock.enabled || !_streamed) {
+		return Streaming::PlanRtxFrameGeneration(clock);
+	}
+	clock.supported = Streaming::RtxVideoFrameGenerationSupported();
+	clock.blocked = Streaming::RtxFrameGenerationBlocked();
+	clock.fullscreen = isFullScreen() || _window->isFullScreen();
+	clock.windowWidth = width();
+	clock.windowHeight = height();
+	const auto &player = _streamed->instance.player();
+	clock.playing = player.playing()
+		&& !(_stories && _stories->paused());
+	const auto screen = _window->screen();
+	const auto hz = screen ? int(screen->refreshRate() + 0.5) : 0;
+	clock.refreshMs = (hz >= 24) ? ((1000 + (hz / 2)) / hz) : 0;
+	clock.now = crl::now();
+	clock.waitingSince = _fgWaitSince;
+	const auto anchors = _streamed->instance.interpolationAnchors();
+	clock.pair = anchors.valid;
+	if (anchors.valid) {
+		clock.alpha = anchors.alpha;
+		clock.width = anchors.previous.width();
+		clock.height = anchors.previous.height();
+		clock.nextWidth = anchors.next.width();
+		clock.nextHeight = anchors.next.height();
+		clock.previousDisplay = anchors.previousDisplay;
+		clock.nextDisplay = anchors.nextDisplay;
+		clock.previousPosition = anchors.previousPosition;
+		clock.nextPosition = anchors.nextPosition;
+	}
+	const auto plan = Streaming::PlanRtxFrameGeneration(clock);
+	Streaming::RtxFrameGenerationNoteSkip(
+		plan.reason,
+		clock.width,
+		clock.height);
+	return plan;
+}
+
+void OverlayWidget::scheduleFrameGeneration() {
+	_frameGenerationTimer.cancel();
+	if (!_streamed || !videoShown()) {
+		_fgWaitSince = 0;
+		return;
+	}
+	const auto anchors = _streamed->instance.interpolationAnchors();
+	if (anchors.valid) {
+		_fgWaitSince = 0;
+	} else if (!_fgWaitSince) {
+		_fgWaitSince = crl::now();
+	}
+	const auto plan = frameGenerationPlan();
+	const auto now = crl::now();
+	if (plan.nextWake > now) {
+		_frameGenerationTimer.callOnce(plan.nextWake - now);
+	}
+}
+
 QImage OverlayWidget::currentVideoFrameImage() const {
 	return _streamed->instance.player().ready()
 		? _streamed->instance.player().currentFrameImage()
@@ -1705,6 +1797,8 @@ void OverlayWidget::clearStreaming(bool savePosition) {
 	}
 	_fullScreenVideo = false;
 	_streamed = nullptr;
+	_fgWaitSince = 0;
+	_frameGenerationTimer.cancel();
 }
 
 void OverlayWidget::documentUpdated(not_null<DocumentData*> document) {
@@ -5196,6 +5290,9 @@ bool OverlayWidget::initStreaming(const StartStreaming &startStreaming) {
 		}
 		updatePlaybackState();
 	}
+	Streaming::RtxFrameGenerationNoteClip(
+		reinterpret_cast<std::uintptr_t>(_streamed.get()));
+	scheduleFrameGeneration();
 	return true;
 }
 
@@ -5449,6 +5546,7 @@ void OverlayWidget::handleStreamingUpdate(Streaming::Update &&update) {
 		Core::App().updateNonIdle();
 		updatePlaybackState();
 		_streamedPosition = update.position;
+		scheduleFrameGeneration();
 	}, [&](PreloadedAudio) {
 		updatePlaybackState();
 	}, [&](UpdateAudio) {
@@ -5692,9 +5790,11 @@ void OverlayWidget::playbackPauseResume() {
 		_streamed->instance.resume();
 		updatePlaybackState();
 		playbackPauseMusic();
+		scheduleFrameGeneration();
 	} else {
 		_streamed->instance.pause();
 		updatePlaybackState();
+		scheduleFrameGeneration();
 	}
 }
 
@@ -6590,6 +6690,7 @@ void OverlayWidget::paint(not_null<Renderer*> renderer) {
 					_stories->ready();
 				}
 			}
+			scheduleFrameGeneration();
 		} else {
 			validatePhotoCurrentImage();
 			if (_stories && !_blurred) {

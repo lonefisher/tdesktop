@@ -1179,6 +1179,35 @@ VideoTrack::FrameWithIndex VideoTrack::Shared::frameForPaintWithIndex() {
 	};
 }
 
+VideoTrack::Shared::InterpolationPeek
+VideoTrack::Shared::interpolationPeek() {
+	auto result = InterpolationPeek();
+	const auto value = counter();
+	if (value < 0 || (value % 2) == 0) {
+		return result;
+	}
+	const auto nextSlot = (value + 1) % (2 * kFramesCount);
+	const auto next = getFrame(nextSlot / 2);
+	if (next->displayed != kTimeUnknown
+		|| next->display == kTimeUnknown
+		|| next->position == kTimeUnknown
+		|| next->position == kFinishedPosition
+		|| !IsRasterized(next)) {
+		return result;
+	}
+	const auto previous = getFrame(value / 2);
+	if (previous->displayed == kTimeUnknown
+		|| previous->position == kTimeUnknown
+		|| previous->position == kFinishedPosition
+		|| !IsRasterized(previous)) {
+		return result;
+	}
+	result.valid = true;
+	result.previous = previous;
+	result.next = next;
+	return result;
+}
+
 VideoTrack::VideoTrack(
 	const PlaybackOptions &options,
 	Stream &&stream,
@@ -1318,6 +1347,40 @@ FrameWithInfo VideoTrack::frameWithInfo(const Instance *instance) {
 		.avPixelFormat = data.frame->avPixelFormat,
 		.sourceHdr = data.frame->sourceHdr,
 	};
+}
+
+InterpolationAnchors VideoTrack::interpolationAnchors() {
+	auto result = InterpolationAnchors();
+	const auto peeked = _shared->interpolationPeek();
+	if (!peeked.valid || !peeked.previous || !peeked.next) {
+		return result;
+	}
+	const auto fill = [](Frame *frame) {
+		if (!frame->original.isNull()) {
+			return;
+		}
+		if (frame->format == FrameFormat::YUV420
+			|| frame->format == FrameFormat::NV12) {
+			frame->original = ConvertToARGB32(frame->format, frame->yuv);
+		}
+	};
+	fill(peeked.previous);
+	fill(peeked.next);
+	if (peeked.previous->original.isNull()
+		|| peeked.next->original.isNull()) {
+		return result;
+	}
+	result.valid = true;
+	result.previousIndex = peeked.previous->index;
+	result.nextIndex = peeked.next->index;
+	result.previousDisplay = peeked.previous->display;
+	result.nextDisplay = peeked.next->display;
+	result.previousPosition = peeked.previous->position;
+	result.nextPosition = peeked.next->position;
+	result.alpha = peeked.previous->alpha || peeked.next->alpha;
+	result.previous = peeked.previous->original;
+	result.next = peeked.next->original;
+	return result;
 }
 
 QImage VideoTrack::superResolvedFrame(

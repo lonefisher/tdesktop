@@ -218,6 +218,10 @@ FrameWithInfo Instance::frameWithInfo() const {
 	return player().frameWithInfo(this);
 }
 
+InterpolationAnchors Instance::interpolationAnchors() const {
+	return player().interpolationAnchors();
+}
+
 bool Instance::markFrameShown() const {
 	Expects(_shared != nullptr);
 

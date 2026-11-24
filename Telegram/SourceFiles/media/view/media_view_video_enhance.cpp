@@ -8,6 +8,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "media/view/media_view_video_enhance.h"
 
 #include "lang/lang_keys.h"
+#include "media/streaming/media_streaming_rtx_fg.h"
 #include "media/streaming/media_streaming_rtx_vsr.h"
 #include "menu/menu_checked_action.h"
 #include "ui/widgets/popup_menu.h"
@@ -55,6 +56,23 @@ void AddVideoHdr(not_null<Ui::PopupMenu*> menu, quintptr windowId) {
 	action->setEnabled(available);
 }
 
+void AddFrameGeneration(not_null<Ui::PopupMenu*> menu) {
+	const auto available = Streaming::RtxVideoFrameGenerationMenuAvailable();
+	const auto action = Menu::AddCheckedAction(
+		menu,
+		tr::lng_fishgram_rtx_fg(tr::now),
+		[=] {
+			if (!Streaming::RtxVideoFrameGenerationMenuAvailable()) {
+				return;
+			}
+			const auto next = !Streaming::RtxVideoFrameGenerationEnabled();
+			Streaming::SetRtxVideoFrameGenerationEnabled(next);
+		},
+		nullptr,
+		Streaming::RtxVideoFrameGenerationEnabled());
+	action->setEnabled(available);
+}
+
 } // namespace
 
 void FillVideoEnhanceMenu(
@@ -62,6 +80,7 @@ void FillVideoEnhanceMenu(
 		quintptr windowId) {
 	AddSuperResolution(menu);
 	AddVideoHdr(menu, windowId);
+	AddFrameGeneration(menu);
 }
 
 } // namespace Media::View
