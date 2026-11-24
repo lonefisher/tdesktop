@@ -484,10 +484,13 @@ std::wstring ParentPath(std::wstring path) {
 }
 
 bool EndsWithDll(const std::wstring &path) {
-	const auto name = std::wstring(kRtxDlssNrDllName);
-	const auto wide = std::wstring(name.begin(), name.end());
+	const auto wide = std::wstring(
+		kRtxDlssNrDllName,
+		kRtxDlssNrDllName + std::strlen(kRtxDlssNrDllName));
 	return path.size() > wide.size()
-		&& !_wcsicmp(path.c_str() + path.size() - wide.size(), wide.c_str());
+		&& !_wcsicmp(
+			path.c_str() + (path.size() - wide.size()),
+			wide.c_str());
 }
 
 std::wstring DllIn(const std::wstring &directoryOrFile) {
@@ -499,8 +502,10 @@ std::wstring DllIn(const std::wstring &directoryOrFile) {
 	if (!candidate.empty() && candidate.back() != L'\\' && candidate.back() != L'/') {
 		candidate.push_back(L'\\');
 	}
-	const auto name = std::wstring(kRtxDlssNrDllName);
-	candidate.append(name.begin(), name.end());
+	const auto wide = std::wstring(
+		kRtxDlssNrDllName,
+		kRtxDlssNrDllName + std::strlen(kRtxDlssNrDllName));
+	candidate.append(wide);
 	return FileExists(candidate) ? FullPath(candidate) : std::wstring();
 }
 
@@ -561,19 +566,19 @@ RtxNrTrust TrustOf(const std::wstring &path) {
 	data.pFile = &file;
 	data.dwStateAction = WTD_STATEACTION_VERIFY;
 	data.dwProvFlags = WTD_SAFER_FLAG | WTD_CACHE_ONLY_URL_RETRIEVAL;
-	auto action = WINTRUST_ACTION_GENERIC_VERIFY_V2;
+	GUID action = WINTRUST_ACTION_GENERIC_VERIFY_V2;
 	const auto status = WinVerifyTrust(
 		reinterpret_cast<HWND>(INVALID_HANDLE_VALUE),
 		&action,
 		&data);
 	wchar_t name[256] = {};
-	if (const auto *provider = WTHelperProvDataFromStateData(data.hWVTStateData)) {
-		if (const auto *signer = WTHelperGetProvSignerFromChain(
+	if (auto *provider = WTHelperProvDataFromStateData(data.hWVTStateData)) {
+		if (auto *signer = WTHelperGetProvSignerFromChain(
 				provider,
 				0,
 				FALSE,
 				0)) {
-			if (const auto *cert = WTHelperGetProvCertFromChain(signer, 0)) {
+			if (auto *cert = WTHelperGetProvCertFromChain(signer, 0)) {
 				CertGetNameStringW(
 					cert->pCert,
 					CERT_NAME_SIMPLE_DISPLAY_TYPE,
