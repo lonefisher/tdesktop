@@ -57,7 +57,7 @@ using Microsoft::WRL::ComPtr;
 constexpr auto kNgxSuccess = 0x1u;
 constexpr auto kNgxFail = 0xBAD00000u;
 
-// The signed snippet only accepts a caller whose module name contains this.
+// The signed snippet rejects a caller whose module name lacks nvngx.dll.
 constexpr wchar_t kCallerName[] = L"nvngx.dll";
 
 using InitExtFn = uint32_t (*)(
@@ -255,8 +255,7 @@ void ResetParameter(void *self) {
 	}
 }
 
-// Measured Feature 18 slot order: Set void*, D3D12, D3D11, int, uint,
-// double, float, uint64, then the matching Get slots, then Reset.
+// Feature 18 vtable: Set void* through uint64, matching Gets, then Reset.
 const void *kParameterVtable[] = {
 	reinterpret_cast<const void *>(&SetPointer),
 	reinterpret_cast<const void *>(&SetResource),
@@ -778,6 +777,29 @@ public:
 			return {};
 		}
 		refreshIdentity();
+		const auto early = PlanRtxDlssNr({
+			.enabled = true,
+			.rtx = _rtx,
+			.surface = RtxNrSurface::MediaViewer,
+			.fullscreen = fullscreen,
+			.windowLongEdge = windowLongEdge,
+			.runtimeFile = (_kind != RtxNrPathKind::None),
+			.trust = _trust,
+			.versionOk = _versionOk,
+			.width = kRtxDlssNrMinEdge,
+			.height = kRtxDlssNrMinEdge,
+			.alpha = frame.alpha,
+			.blocked = _blocked,
+		});
+		if (early != RtxNrSkipReason::None) {
+			logSkip(early);
+			return {};
+		}
+		if (_cache.valid
+			&& _cache.index == frame.index
+			&& _cache.epoch == _clock.epoch) {
+			return _cache.image;
+		}
 		const auto source = ImageFromFrame(frame);
 		const auto size = source.isNull()
 			? QSize()
@@ -799,13 +821,6 @@ public:
 		if (reason != RtxNrSkipReason::None) {
 			logSkip(reason);
 			return {};
-		}
-		if (_cache.valid
-			&& _cache.index == frame.index
-			&& _cache.epoch == _clock.epoch
-			&& _cache.width == size.width()
-			&& _cache.height == size.height()) {
-			return _cache.image;
 		}
 		auto image = evaluate(source);
 		if (image.isNull()) {
@@ -944,6 +959,7 @@ private:
 		}
 		ComPtr<IDXGIFactory1> factory;
 		if (FAILED(CreateDXGIFactory1(IID_PPV_ARGS(&factory)))) {
+			failCreate(kNgxFail);
 			return false;
 		}
 		ComPtr<IDXGIAdapter1> adapter;
@@ -966,6 +982,8 @@ private:
 				chosen.Get(),
 				D3D_FEATURE_LEVEL_11_0,
 				IID_PPV_ARGS(&_device)))) {
+			failCreate(kNgxFail);
+			releaseDevice();
 			return false;
 		}
 		D3D12_COMMAND_QUEUE_DESC queue = {};
@@ -986,15 +1004,18 @@ private:
 				0,
 				D3D12_FENCE_FLAG_NONE,
 				IID_PPV_ARGS(&_fence)))) {
+			failCreate(kNgxFail);
 			releaseDevice();
 			return false;
 		}
 		_fenceEvent = CreateEventW(nullptr, FALSE, FALSE, nullptr);
 		if (!_fenceEvent) {
+			failCreate(kNgxFail);
 			releaseDevice();
 			return false;
 		}
 		if (!loadSnippet()) {
+			failCreate(kNgxFail);
 			releaseDevice();
 			return false;
 		}
@@ -1022,11 +1043,10 @@ private:
 			nullptr,
 			LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32);
 		if (!_module) {
-			LOG(("DLSS NR Error: feature creation failed, load %1."
-				).arg(int(GetLastError())));
 			return false;
 		}
-		if (!PatchCallerName(_module)) {
+		if (!PatchCallerName(_module) && !_loggedCaller) {
+			_loggedCaller = true;
 			LOG(("DLSS NR Debug: skip reason=caller."));
 		}
 		_init = reinterpret_cast<InitExtFn>(
@@ -1040,7 +1060,6 @@ private:
 		_shutdown = reinterpret_cast<ShutdownFn>(
 			GetProcAddress(_module, "NVSDK_NGX_D3D12_Shutdown1"));
 		if (!_init || !_create || !_evaluate || !_release || !_shutdown) {
-			LOG(("DLSS NR Error: feature creation failed, exports."));
 			return false;
 		}
 		return true;
@@ -1489,6 +1508,7 @@ private:
 	bool _blocked = false;
 	bool _inited = false;
 	bool _loggedActive = false;
+	bool _loggedCaller = false;
 	int _failures = 0;
 	unsigned _logged = 0;
 	RtxNrPathKind _kind = RtxNrPathKind::None;
