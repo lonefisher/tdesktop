@@ -284,6 +284,7 @@ void OverlayWidget::RendererGL::deinit(QOpenGLFunctions *f) {
 	_chromaSizeV = QSize();
 	_chromaNV12 = false;
 	_trackFrameIndex = 0;
+	_trackedFrameFormat = -1;
 	_streamedIndex = 0;
 	_imageProgram = std::nullopt;
 	_texturedVertexShader = nullptr;
@@ -387,6 +388,8 @@ void OverlayWidget::RendererGL::paintVideoStream() {
 void OverlayWidget::RendererGL::paintTransformedVideoFrame(
 		ContentGeometry geometry) {
 	const auto data = _owner->videoFrameWithInfo();
+	const auto formatChanged = (_trackedFrameFormat != int(data.format));
+	_trackedFrameFormat = int(data.format);
 	if (data.format == Streaming::FrameFormat::None) {
 		return;
 	} else if (data.format == Streaming::FrameFormat::ARGB32) {
@@ -417,7 +420,8 @@ void OverlayWidget::RendererGL::paintTransformedVideoFrame(
 	const auto yuv = data.yuv;
 	const auto nv12changed = (_chromaNV12 != nv12);
 
-	const auto upload = (_trackFrameIndex != data.index)
+	const auto upload = formatChanged
+		|| (_trackFrameIndex != data.index)
 		|| (_streamedIndex != _owner->streamedIndex());
 	_trackFrameIndex = data.index;
 	_streamedIndex = _owner->streamedIndex();

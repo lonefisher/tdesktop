@@ -926,6 +926,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 "lng_settings_system_integration" = "System integration";
 "lng_settings_performance" = "Performance";
 "lng_settings_enable_hwaccel" = "Hardware accelerated video decoding";
+"lng_fishgram_video_enhance" = "Video enhancement";
 "lng_fishgram_rtx_vsr" = "NVIDIA RTX video super resolution";
 "lng_fishgram_rtx_vsr_about" = "On supported NVIDIA GPUs, this follows the video super resolution setting in the NVIDIA app. Turn it off here to keep normal playback. If the driver cannot enable it, playback stays the same.";
 "lng_settings_enable_opengl" = "Enable OpenGL rendering for media";

@@ -10,9 +10,13 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "media/streaming/media_streaming_common.h"
 #include "media/streaming/media_streaming_rtx_vsr_plan.h"
 
+#include <rpl/producer.h>
+
 namespace Media::Streaming {
 
 [[nodiscard]] bool RtxVideoSuperResolutionEnabled();
+[[nodiscard]] rpl::producer<bool> RtxVideoSuperResolutionEnabledValue();
+void SetRtxVideoSuperResolutionEnabled(bool enabled);
 [[nodiscard]] bool RtxVideoSuperResolutionSupported();
 void RtxVideoSuperResolutionNoteToggled(bool enabled);
 

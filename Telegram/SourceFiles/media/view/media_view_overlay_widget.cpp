@@ -71,6 +71,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "media/streaming/media_streaming_document.h"
 #include "media/streaming/media_streaming_player.h"
 #include "media/streaming/media_streaming_rtx_vsr.h"
+#include "media/view/media_view_video_enhance.h"
 #include "media/player/media_player_instance.h"
 #include "history/history.h"
 #include "history/history_item_helpers.h"
@@ -997,6 +998,12 @@ OverlayWidget::OverlayWidget()
 
 	_dropdown->setHiddenCallback([this] { dropdownHidden(); });
 	_dropdownShowTimer.setCallback([=] { showDropdown(); });
+	Streaming::RtxVideoSuperResolutionEnabledValue(
+	) | rpl::skip(1) | rpl::on_next([=](bool) {
+		if (videoShown()) {
+			update();
+		}
+	}, lifetime());
 
 	orderWidgets();
 }
@@ -8724,7 +8731,9 @@ bool OverlayWidget::handleContextMenu(std::optional<QPoint> position) {
 	_menu = base::make_unique_q<Ui::PopupMenu>(
 		_window,
 		st::mediaviewPopupMenu);
-	fillContextMenuActions(Ui::Menu::CreateAddActionCallback(_menu));
+	const auto addAction = Ui::Menu::CreateAddActionCallback(_menu);
+	addVideoEnhanceSubmenu(addAction);
+	fillContextMenuActions(addAction);
 
 	if (_menu->empty()) {
 		_menu = nullptr;
@@ -9047,7 +9056,56 @@ void OverlayWidget::receiveMouse() {
 	_receiveMouse = true;
 }
 
+bool OverlayWidget::videoEnhanceAvailable() const {
+	const auto story = _stories ? _stories->story() : nullptr;
+	const auto document = story ? story->document() : _document;
+	return document
+		&& (document->isVideoFile() || document->isVideoMessage());
+}
+
+void OverlayWidget::addVideoEnhanceSubmenu(
+		const Ui::Menu::MenuCallback &addAction) {
+	if (!videoEnhanceAvailable()) {
+		return;
+	}
+	addAction({
+		.text = tr::lng_fishgram_video_enhance(tr::now),
+		.fillSubmenu = [=](not_null<Ui::PopupMenu*> menu) {
+			FillVideoEnhanceMenu(menu);
+		},
+	});
+}
+
+void OverlayWidget::showVideoMoreMenu() {
+	_menu = base::make_unique_q<Ui::PopupMenu>(
+		_window,
+		st::mediaviewPopupMenu);
+	_menu->setForcedOrigin(Ui::PanelAnimation::Origin::BottomRight);
+	_menu->setForcedVerticalOrigin(Ui::PopupMenu::VerticalOrigin::Bottom);
+	const auto addAction = Ui::Menu::CreateAddActionCallback(_menu);
+	addVideoEnhanceSubmenu(addAction);
+	fillContextMenuActions(addAction);
+	if (_menu->empty()) {
+		_menu = nullptr;
+		return;
+	}
+	if (_stories) {
+		_stories->menuShown(true);
+	}
+	_menu->setDestroyedCallback(crl::guard(_widget, [=] {
+		dropdownHidden();
+		_receiveMouse = false;
+		InvokeQueued(_widget, [=] { receiveMouse(); });
+	}));
+	_menu->popup(_widget->mapToGlobal(QPoint(width(), height())));
+	activateControls();
+}
+
 void OverlayWidget::showDropdown() {
+	if (videoEnhanceAvailable()) {
+		showVideoMoreMenu();
+		return;
+	}
 	_dropdown->clearActions();
 	fillContextMenuActions(Ui::Menu::CreateAddActionCallback(_dropdown));
 	_dropdown->moveToRight(0, height() - _dropdown->height());

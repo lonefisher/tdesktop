@@ -717,6 +717,7 @@ void OverlayWidget::RendererRhi::releaseResources() {
 	_chromaNV12 = false;
 	_usingExternalVideoTextures = false;
 	_trackFrameIndex = -1;
+	_trackedFrameFormat = -1;
 	_streamedIndex = 0;
 #ifdef Q_OS_MAC
 	_metalTextureCache.flush();
@@ -1130,6 +1131,8 @@ void OverlayWidget::RendererRhi::paintTransformedVideoFrame(
 		return;
 	}
 	const auto data = _owner->videoFrameWithInfo();
+	const auto formatChanged = (_trackedFrameFormat != int(data.format));
+	_trackedFrameFormat = int(data.format);
 	if (data.format == Streaming::FrameFormat::None) {
 		return;
 	} else if (data.format == Streaming::FrameFormat::ARGB32) {
@@ -1148,7 +1151,8 @@ void OverlayWidget::RendererRhi::paintTransformedVideoFrame(
 	const auto yuv = data.yuv;
 	const auto nv12changed = !nativeTexture && (_chromaNV12 != nv12);
 
-	const auto upload = (_trackFrameIndex != data.index)
+	const auto upload = formatChanged
+		|| (_trackFrameIndex != data.index)
 		|| (_streamedIndex != _owner->streamedIndex())
 		|| !_yTexture
 		|| (nv12 ? !_uvTexture : (!_uTexture || !_vTexture));

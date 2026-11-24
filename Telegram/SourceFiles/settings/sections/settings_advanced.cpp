@@ -959,15 +959,11 @@ void BuildPerformanceSection(SectionBuilder &builder) {
 	}
 
 	if (Media::Streaming::RtxVideoSuperResolutionSupported()) {
-		const auto pref = Media::Streaming::kRtxVideoSuperResolutionPref;
 		const auto vsr = builder.addButton({
 			.id = u"advanced/rtx_vsr"_q,
 			.title = tr::lng_fishgram_rtx_vsr(),
 			.st = &st::settingsButtonNoIcon,
-			.toggled = rpl::single(
-				Core::App().settings().readPref<bool>(
-					pref,
-					Media::Streaming::kRtxVideoSuperResolutionDefault)),
+			.toggled = Media::Streaming::RtxVideoSuperResolutionEnabledValue(),
 			.keywords = {
 				u"nvidia"_q,
 				u"rtx"_q,
@@ -980,13 +976,9 @@ void BuildPerformanceSection(SectionBuilder &builder) {
 			vsr->toggledValue(
 			) | rpl::filter([=](bool enabled) {
 				return enabled
-					!= Core::App().settings().readPref<bool>(
-						pref,
-						Media::Streaming::kRtxVideoSuperResolutionDefault);
+					!= Media::Streaming::RtxVideoSuperResolutionEnabled();
 			}) | rpl::on_next([=](bool enabled) {
-				Core::App().settings().writePref<bool>(pref, enabled);
-				Core::App().saveSettingsDelayed();
-				Media::Streaming::RtxVideoSuperResolutionNoteToggled(enabled);
+				Media::Streaming::SetRtxVideoSuperResolutionEnabled(enabled);
 			}, vsr->lifetime());
 		}
 		builder.addDividerText(tr::lng_fishgram_rtx_vsr_about());
