@@ -9114,7 +9114,7 @@ void OverlayWidget::showDropdown() {
 		const auto action = new QAction(
 			tr::lng_fishgram_video_enhance(tr::now),
 			_dropdown.data());
-		action->setMenu(new QMenu(action));
+		action->setMenu(new QMenu(_window));
 		auto row = base::make_unique_q<Ui::Menu::Action>(
 			_dropdown->menu(),
 			_dropdown->menu()->st(),
@@ -9122,7 +9122,7 @@ void OverlayWidget::showDropdown() {
 			nullptr,
 			nullptr);
 		row->setPreventClose(true);
-		QObject::connect(action, &QAction::triggered, this, [=] {
+		QObject::connect(action, &QAction::triggered, this, [=](bool) {
 			showVideoEnhanceMenu();
 		});
 		_dropdown->addAction(std::move(row));
