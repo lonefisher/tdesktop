@@ -31,6 +31,22 @@ static_assert(kDisplaySkipped != kTimeUnknown);
 
 using ::Media::ValidFrameSize;
 
+[[nodiscard]] bool AvFrameIsHdr(const AVFrame *frame) {
+	if (!frame) {
+		return false;
+	}
+	if (frame->color_trc == AVCOL_TRC_SMPTE2084
+		|| frame->color_trc == AVCOL_TRC_ARIB_STD_B67) {
+		return true;
+	}
+	return av_frame_get_side_data(
+			frame,
+			AV_FRAME_DATA_MASTERING_DISPLAY_METADATA)
+		|| av_frame_get_side_data(
+			frame,
+			AV_FRAME_DATA_CONTENT_LIGHT_LEVEL);
+}
+
 [[nodiscard]] QSize RtxRequestTarget(
 		const FrameRequest &request,
 		int rotation) {
@@ -481,6 +497,7 @@ void VideoTrackObject::rasterizeFrame(not_null<Frame*> frame) {
 	fillRequests(frame);
 	frame->format = FrameFormat::None;
 	frame->nativeFrame = NativeFrame();
+	frame->sourceHdr = AvFrameIsHdr(frame->decoded.get());
 	if (frame->decoded->hw_frames_ctx) {
 #ifdef Q_OS_MAC
 		const auto hwFormat = frame->decoded->format;
@@ -534,6 +551,7 @@ void VideoTrackObject::rasterizeFrame(not_null<Frame*> frame) {
 	const auto frameWithData = frame->transferred
 		? frame->transferred.get()
 		: frame->decoded.get();
+	frame->sourceHdr = frame->sourceHdr || AvFrameIsHdr(frameWithData);
 	if ((frameWithData->format == AV_PIX_FMT_YUV420P
 		|| frameWithData->format == AV_PIX_FMT_NV12) && !requireARGB32()) {
 		const auto nv12 = (frameWithData->format == AV_PIX_FMT_NV12);
@@ -1266,6 +1284,7 @@ FrameWithInfo VideoTrack::frameWithInfo(
 		.image = frameImage(data.frame, request, instance),
 		.format = FrameFormat::ARGB32,
 		.index = data.index,
+		.sourceHdr = data.frame->sourceHdr,
 	};
 }
 
@@ -1287,6 +1306,7 @@ FrameWithInfo VideoTrack::frameWithInfo(const Instance *instance) {
 		.format = data.frame->format,
 		.index = data.index,
 		.alpha = data.frame->alpha,
+		.sourceHdr = data.frame->sourceHdr,
 	};
 }
 
@@ -1320,6 +1340,7 @@ QImage VideoTrack::superResolvedFrame(
 			.format = frame->format,
 			.index = frame->index,
 			.alpha = frame->alpha,
+			.sourceHdr = frame->sourceHdr,
 		},
 		target);
 	if (upscaled.isNull()) {

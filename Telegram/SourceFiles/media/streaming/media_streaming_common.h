@@ -207,6 +207,7 @@ struct FrameWithInfo {
 	FrameFormat format = FrameFormat::None;
 	int index = -1;
 	bool alpha = false;
+	bool sourceHdr = false;
 };
 
 } // namespace Streaming
