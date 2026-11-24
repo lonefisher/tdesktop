@@ -11,6 +11,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "core/core_settings.h"
 #include "logs.h"
 
+#include <rpl/variable.h>
+
 #if defined Q_OS_WIN
 #ifndef NOMINMAX
 #define NOMINMAX
@@ -925,6 +927,14 @@ bool &EnabledLatch() {
 
 #endif // Q_OS_WIN
 
+rpl::variable<bool> &VideoSuperResolutionValue() {
+	static auto value = rpl::variable<bool>(
+		Core::App().settings().readPref<bool>(
+			kRtxVideoSuperResolutionPref,
+			kRtxVideoSuperResolutionDefault));
+	return value;
+}
+
 } // namespace
 
 bool RtxVideoSuperResolutionEnabled() {
@@ -938,6 +948,22 @@ bool RtxVideoSuperResolutionEnabled() {
 	EnabledLatch() = enabled;
 #endif // Q_OS_WIN
 	return enabled;
+}
+
+rpl::producer<bool> RtxVideoSuperResolutionEnabledValue() {
+	return VideoSuperResolutionValue().value();
+}
+
+void SetRtxVideoSuperResolutionEnabled(bool enabled) {
+	if (RtxVideoSuperResolutionEnabled() == enabled) {
+		return;
+	}
+	Core::App().settings().writePref<bool>(
+		kRtxVideoSuperResolutionPref,
+		enabled);
+	Core::App().saveSettingsDelayed();
+	RtxVideoSuperResolutionNoteToggled(enabled);
+	VideoSuperResolutionValue() = enabled;
 }
 
 bool RtxVideoSuperResolutionSupported() {

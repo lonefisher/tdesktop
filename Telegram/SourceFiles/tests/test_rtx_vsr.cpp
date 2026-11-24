@@ -25,6 +25,33 @@ void Check(bool ok, const char *name) {
 
 using namespace Media::Streaming;
 
+void TestSharedToggle() {
+	const auto missing = RtxBoolPrefEnabled(false, false);
+	const auto storedOn = RtxBoolPrefEnabled(true, true);
+	const auto storedOff = RtxBoolPrefEnabled(true, false);
+	const auto onRow = RtxVsrToggleState(storedOn, true);
+	const auto offRow = RtxVsrToggleState(storedOff, true);
+	const auto gray = RtxVsrToggleState(storedOn, false);
+	const auto defaultRow = RtxVsrToggleState(missing, true);
+
+	Check(missing, "missing pref is the settings default");
+	Check(onRow.checked && onRow.available, "settings on is a checked row");
+	Check(!offRow.checked && offRow.available, "settings off is unchecked");
+	Check(defaultRow.checked, "viewer row follows the default");
+	Check(gray.checked && !gray.available, "unsupported stays checked and gray");
+	Check(!RtxVsrStoredAfterToggle(storedOn, true), "menu off matches settings off");
+	Check(RtxVsrStoredAfterToggle(storedOff, true), "menu on matches settings on");
+	Check(
+		RtxVsrStoredAfterToggle(missing, true) == !missing,
+		"default toggle writes the opposite");
+	Check(
+		RtxVsrStoredAfterToggle(storedOn, false) == storedOn,
+		"gray row does not write");
+	Check(
+		RtxVsrStoredAfterToggle(storedOff, false) == storedOff,
+		"gray off stays off");
+}
+
 void TestPrefAndAdapter() {
 	Check(
 		std::string(kRtxVideoSuperResolutionPref)
@@ -212,6 +239,7 @@ void TestPackAndBlank() {
 } // namespace
 
 int main() {
+	TestSharedToggle();
 	TestPrefAndAdapter();
 	TestPlan();
 	TestFallbackList();
