@@ -428,6 +428,9 @@ private:
 	void checkSingleViewMediaBurn();
 
 	void fillContextMenuActions(const Ui::Menu::MenuCallback &addAction);
+	void addVideoEnhanceSubmenu(const Ui::Menu::MenuCallback &addAction);
+	void showVideoMoreMenu();
+	[[nodiscard]] bool videoEnhanceAvailable() const;
 
 	void resizeCenteredControls();
 	void resizeContentByScreenSize();

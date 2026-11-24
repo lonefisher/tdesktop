@@ -88,6 +88,27 @@ struct RtxVsrSession {
 	return present ? nonEmpty : kRtxVideoSuperResolutionDefault;
 }
 
+struct RtxVsrToggle {
+	bool checked = false;
+	bool available = false;
+};
+
+[[nodiscard]] inline RtxVsrToggle RtxVsrToggleState(
+		bool storedEnabled,
+		bool supported) {
+	return {
+		.checked = storedEnabled,
+		.available = supported,
+	};
+}
+
+// A gray row does not change the stored bit the settings switch reads.
+[[nodiscard]] inline bool RtxVsrStoredAfterToggle(
+		bool storedEnabled,
+		bool supported) {
+	return supported ? !storedEnabled : storedEnabled;
+}
+
 [[nodiscard]] inline bool RtxVsrBlocked(RtxVsrSession session) {
 	return session.state != RtxVsrSessionState::Ready;
 }
