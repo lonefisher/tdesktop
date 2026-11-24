@@ -122,6 +122,41 @@ struct RtxVsrSession {
 	return (size.width > size.height) ? size.width : size.height;
 }
 
+// NV12 needs an even coded size. One extra coded row or column is cropped.
+[[nodiscard]] inline RtxVsrSize RtxEvenSize(RtxVsrSize size) {
+	if (size.width > 0 && (size.width % 2)) {
+		--size.width;
+	}
+	if (size.height > 0 && (size.height % 2)) {
+		--size.height;
+	}
+	return size;
+}
+
+enum class RtxVsrRejectReason {
+	None,
+	EmptyTarget,
+	TinySource,
+	TargetNotLarger,
+	OneSide,
+	AlreadyLarge,
+	EvenFit,
+};
+
+[[nodiscard]] inline const char *RtxVsrRejectReasonName(
+		RtxVsrRejectReason reason) {
+	switch (reason) {
+	case RtxVsrRejectReason::None: return "none";
+	case RtxVsrRejectReason::EmptyTarget: return "empty-target";
+	case RtxVsrRejectReason::TinySource: return "tiny-source";
+	case RtxVsrRejectReason::TargetNotLarger: return "target-not-larger";
+	case RtxVsrRejectReason::OneSide: return "one-side";
+	case RtxVsrRejectReason::AlreadyLarge: return "already-large";
+	case RtxVsrRejectReason::EvenFit: return "even-fit";
+	}
+	return "other";
+}
+
 [[nodiscard]] inline RtxVsrSize RtxFitEven(
 		RtxVsrSize source,
 		int limitWidth,
@@ -157,6 +192,7 @@ struct RtxVsrSession {
 		RtxVsrSize source,
 		RtxVsrSize target) {
 	auto result = RtxVsrOutputList();
+	source = RtxEvenSize(source);
 	if ((source.width < kRtxVsrMinSourceEdge)
 		|| (source.height < kRtxVsrMinSourceEdge)
 		|| (source.width % 2)
@@ -200,6 +236,44 @@ struct RtxVsrSession {
 		}
 	}
 	return result;
+}
+
+[[nodiscard]] inline RtxVsrRejectReason RtxVsrRejectReasonFor(
+		RtxVsrSize source,
+		RtxVsrSize target) {
+	if (target.isEmpty()) {
+		return RtxVsrRejectReason::EmptyTarget;
+	}
+	source = RtxEvenSize(source);
+	if ((source.width < kRtxVsrMinSourceEdge)
+		|| (source.height < kRtxVsrMinSourceEdge)) {
+		return RtxVsrRejectReason::TinySource;
+	}
+	if (RtxVsrOutputs(source, target).count) {
+		return RtxVsrRejectReason::None;
+	}
+	const auto wider = target.width > source.width;
+	const auto taller = target.height > source.height;
+	if (wider && taller) {
+		const auto cappedWidth = int(std::min(
+			std::min(
+				std::int64_t(target.width),
+				std::int64_t(source.width) * kRtxVsrMaxScale),
+			std::int64_t(kRtxVsrMaxLongEdge)));
+		const auto cappedHeight = int(std::min(
+			std::min(
+				std::int64_t(target.height),
+				std::int64_t(source.height) * kRtxVsrMaxScale),
+			std::int64_t(kRtxVsrMaxLongEdge)));
+		if (cappedWidth <= source.width || cappedHeight <= source.height) {
+			return RtxVsrRejectReason::AlreadyLarge;
+		}
+		return RtxVsrRejectReason::EvenFit;
+	}
+	if (wider || taller) {
+		return RtxVsrRejectReason::OneSide;
+	}
+	return RtxVsrRejectReason::TargetNotLarger;
 }
 
 [[nodiscard]] inline RtxVsrPlan PlanRtxVideoSuperResolution(

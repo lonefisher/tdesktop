@@ -90,6 +90,7 @@ private:
 		crl::time displayed = kTimeUnknown;
 		crl::time display = kTimeUnknown;
 		FrameFormat format = FrameFormat::None;
+		int avPixelFormat = -1;
 
 		base::flat_map<const Instance*, Prepared> prepared;
 
@@ -116,7 +117,11 @@ private:
 		};
 
 		// Called from the wrapped object queue.
-		void init(QImage &&cover, bool hasAlpha, crl::time position);
+		void init(
+			QImage &&cover,
+			bool hasAlpha,
+			crl::time position,
+			int avPixelFormat);
 		[[nodiscard]] bool initialized() const;
 
 		[[nodiscard]] PrepareState prepareState(

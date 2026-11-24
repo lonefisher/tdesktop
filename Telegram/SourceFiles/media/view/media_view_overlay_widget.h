@@ -18,6 +18,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "data/data_cloud_themes.h" // Data::CloudTheme.
 #include "media/stories/media_stories_delegate.h"
 #include "media/view/media_view_playback_controls.h"
+#include "media/streaming/media_streaming_rtx_vsr.h"
 #include "media/view/media_view_open_common.h"
 #include "media/view/media_view_recognition_selection.h"
 #include "media/media_common.h"
@@ -600,7 +601,8 @@ private:
 	[[nodiscard]] bool streamingRequiresControls() const;
 	[[nodiscard]] QImage videoFrame() const; // ARGB (changes prepare format)
 	[[nodiscard]] QImage currentVideoFrameImage() const; // RGB (may convert)
-	[[nodiscard]] Streaming::FrameWithInfo videoFrameWithInfo() const; // YUV
+	[[nodiscard]] Streaming::FrameWithInfo videoFrameWithInfo(
+		Streaming::RtxVsrPath path = Streaming::RtxVsrPath::Overlay) const;
 	[[nodiscard]] int streamedIndex() const;
 	[[nodiscard]] QImage transformedShownContent() const;
 	[[nodiscard]] QImage transformShownContent(

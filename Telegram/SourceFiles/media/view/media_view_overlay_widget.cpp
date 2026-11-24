@@ -1544,7 +1544,8 @@ QImage OverlayWidget::videoFrame() const {
 		: _streamed->instance.info().video.cover;
 }
 
-Streaming::FrameWithInfo OverlayWidget::videoFrameWithInfo() const {
+Streaming::FrameWithInfo OverlayWidget::videoFrameWithInfo(
+		Streaming::RtxVsrPath path) const {
 	Expects(videoShown());
 
 	auto info = _streamed->instance.player().ready()
@@ -1555,16 +1556,20 @@ Streaming::FrameWithInfo OverlayWidget::videoFrameWithInfo() const {
 			.index = -2,
 			.alpha = _streamed->instance.info().video.alpha,
 		};
-	if (!Streaming::RtxVideoSuperResolutionEnabled()) {
-		return info;
-	}
 	// contentGeometry() already stores the unrotated frame rectangle.
+	// The painted size is that rectangle times the widget's device ratio.
 	const auto geometry = contentGeometry();
-	const auto ratio = style::DevicePixelRatio();
+	const auto ratio = std::max(
+		float64(widget()->devicePixelRatioF()),
+		float64(style::DevicePixelRatio()));
 	const auto target = QSize(
 		int(std::ceil(geometry.rect.width() * ratio)),
 		int(std::ceil(geometry.rect.height() * ratio)));
-	return Streaming::WithRtxSuperResolution(std::move(info), target);
+	return Streaming::WithRtxSuperResolution(
+		std::move(info),
+		target,
+		path,
+		quint64(streamedIndex()));
 }
 
 QImage OverlayWidget::currentVideoFrameImage() const {

@@ -1773,18 +1773,24 @@ QImage Pip::videoFrame(const FrameRequest &request) const {
 	return _instance->frame(request);
 }
 
-Streaming::FrameWithInfo Pip::videoFrameWithInfo() const {
+Streaming::FrameWithInfo Pip::videoFrameWithInfo(
+		Streaming::RtxVsrPath path) const {
 	Expects(canUseVideoFrame());
 
 	auto info = _instance->frameWithInfo();
-	if (!Streaming::RtxVideoSuperResolutionEnabled()) {
-		return info;
-	}
-	const auto ratio = style::DevicePixelRatio();
-	auto target = _panel.inner().size() * ratio;
+	const auto ratio = std::max(
+		float64(_panel.widget()->devicePixelRatioF()),
+		float64(style::DevicePixelRatio()));
+	auto target = QSize(
+		int(std::ceil(_panel.inner().width() * ratio)),
+		int(std::ceil(_panel.inner().height() * ratio)));
 	const auto rotation = (_rotation + _instance->info().video.rotation) % 360;
 	target = Streaming::RtxUnrotatedTarget(target, rotation);
-	return Streaming::WithRtxSuperResolution(std::move(info), target);
+	return Streaming::WithRtxSuperResolution(
+		std::move(info),
+		target,
+		path,
+		quint64(reinterpret_cast<quintptr>(&*_instance)));
 }
 
 QImage Pip::staticContent() const {
