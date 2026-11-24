@@ -9122,7 +9122,7 @@ void OverlayWidget::showDropdown() {
 			nullptr,
 			nullptr);
 		row->setPreventClose(true);
-		QObject::connect(action, &QAction::triggered, this, [=](bool) {
+		QObject::connect(action, &QAction::triggered, _dropdown.data(), [=] {
 			showVideoEnhanceMenu();
 		});
 		_dropdown->addAction(std::move(row));
