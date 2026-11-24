@@ -70,7 +70,12 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "media/stories/media_stories_view.h"
 #include "media/streaming/media_streaming_document.h"
 #include "media/streaming/media_streaming_player.h"
+#include "media/streaming/media_streaming_rtx_nr.h"
 #include "media/streaming/media_streaming_rtx_vsr.h"
+#include "ui/widgets/menu/menu_action.h"
+#include "ui/widgets/menu/menu_toggle.h"
+
+#include <QMenu>
 #include "media/player/media_player_instance.h"
 #include "history/history.h"
 #include "history/history_item_helpers.h"
@@ -1527,7 +1532,8 @@ bool OverlayWidget::streamingRequiresControls() const {
 QImage OverlayWidget::videoFrame() const {
 	Expects(videoShown());
 
-	if (Streaming::RtxVideoSuperResolutionEnabled()) {
+	if (Streaming::RtxVideoSuperResolutionEnabled()
+		|| Streaming::RtxDlssNrEnabled()) {
 		const auto info = videoFrameWithInfo();
 		if (info.format == Streaming::FrameFormat::ARGB32
 			&& !info.yuv
@@ -1555,7 +1561,8 @@ Streaming::FrameWithInfo OverlayWidget::videoFrameWithInfo() const {
 			.index = -2,
 			.alpha = _streamed->instance.info().video.alpha,
 		};
-	if (!Streaming::RtxVideoSuperResolutionEnabled()) {
+	if (!Streaming::RtxVideoSuperResolutionEnabled()
+		&& !Streaming::RtxDlssNrEnabled()) {
 		return info;
 	}
 	// contentGeometry() already stores the unrotated frame rectangle.
@@ -1564,7 +1571,16 @@ Streaming::FrameWithInfo OverlayWidget::videoFrameWithInfo() const {
 	const auto target = QSize(
 		int(std::ceil(geometry.rect.width() * ratio)),
 		int(std::ceil(geometry.rect.height() * ratio)));
-	return Streaming::WithRtxSuperResolution(std::move(info), target);
+	if (Streaming::RtxVideoSuperResolutionEnabled()) {
+		info = Streaming::WithRtxSuperResolution(std::move(info), target);
+	}
+	if (Streaming::RtxDlssNrEnabled()) {
+		info = Streaming::WithRtxDlssNr(
+			std::move(info),
+			_fullscreen,
+			std::max(width(), height()));
+	}
+	return info;
 }
 
 QImage OverlayWidget::currentVideoFrameImage() const {
@@ -1634,6 +1650,7 @@ void OverlayWidget::clearStreaming(bool savePosition) {
 	}
 	_fullScreenVideo = false;
 	_streamed = nullptr;
+	Streaming::RtxDlssNrNoteNewClip();
 }
 
 void OverlayWidget::documentUpdated(not_null<DocumentData*> document) {
@@ -5674,6 +5691,7 @@ void OverlayWidget::restartAtProgress(float64 progress) {
 void OverlayWidget::restartAtSeekPosition(crl::time position) {
 	Expects(_streamed != nullptr);
 
+	Streaming::RtxDlssNrNoteDiscontinuity();
 	if (videoShown()) {
 		_streamed->instance.saveFrameToCover();
 		const auto saved = base::take(_rotation);
@@ -8725,6 +8743,14 @@ bool OverlayWidget::handleContextMenu(std::optional<QPoint> position) {
 		_window,
 		st::mediaviewPopupMenu);
 	fillContextMenuActions(Ui::Menu::CreateAddActionCallback(_menu));
+	if (videoShown()) {
+		Ui::Menu::CreateAddActionCallback(_menu)({
+			.text = tr::lng_fishgram_video_enhance(tr::now),
+			.fillSubmenu = [=](not_null<Ui::PopupMenu*> menu) {
+				fillVideoEnhanceMenu(menu);
+			},
+		});
+	}
 
 	if (_menu->empty()) {
 		_menu = nullptr;
@@ -9047,9 +9073,60 @@ void OverlayWidget::receiveMouse() {
 	_receiveMouse = true;
 }
 
+void OverlayWidget::fillVideoEnhanceMenu(not_null<Ui::PopupMenu*> menu) {
+	const auto available = Streaming::RtxDlssNrAvailable();
+	const auto enabled = Streaming::RtxDlssNrEnabled();
+	auto toggle = base::make_unique_q<Ui::Menu::Toggle>(
+		menu->menu(),
+		menu->st().menu,
+		tr::lng_fishgram_dlss_nr(tr::now),
+		[=] {
+			if (!Streaming::RtxDlssNrAvailable()) {
+				return;
+			}
+			Streaming::RtxDlssNrSetEnabled(!Streaming::RtxDlssNrEnabled());
+		},
+		nullptr,
+		nullptr);
+	const auto action = toggle->action();
+	action->setCheckable(true);
+	action->setChecked(enabled);
+	action->setEnabled(available);
+	menu->addAction(std::move(toggle));
+}
+
+void OverlayWidget::showVideoEnhanceMenu() {
+	_videoEnhanceMenu = base::make_unique_q<Ui::PopupMenu>(
+		_window,
+		st::mediaviewPopupMenu);
+	_videoEnhanceMenu->deleteOnHide(false);
+	fillVideoEnhanceMenu(_videoEnhanceMenu.get());
+	_videoEnhanceMenu->popup(_dropdown->mapToGlobal(QPoint(0, 0)));
+}
+
 void OverlayWidget::showDropdown() {
 	_dropdown->clearActions();
 	fillContextMenuActions(Ui::Menu::CreateAddActionCallback(_dropdown));
+	if (videoShown()) {
+		if (!_dropdown->empty()) {
+			_dropdown->addSeparator();
+		}
+		const auto action = new QAction(
+			tr::lng_fishgram_video_enhance(tr::now),
+			_dropdown.data());
+		action->setMenu(new QMenu(_window));
+		auto row = base::make_unique_q<Ui::Menu::Action>(
+			_dropdown->menu(),
+			_dropdown->menu()->st(),
+			action,
+			nullptr,
+			nullptr);
+		row->setPreventClose(true);
+		QObject::connect(action, &QAction::triggered, _dropdown.data(), [=] {
+			showVideoEnhanceMenu();
+		});
+		_dropdown->addAction(std::move(row));
+	}
 	_dropdown->moveToRight(0, height() - _dropdown->height());
 	_dropdown->showAnimated(Ui::PanelAnimation::Origin::BottomRight);
 	_dropdown->setFocus();
