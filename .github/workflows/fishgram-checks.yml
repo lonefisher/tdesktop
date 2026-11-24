@@ -300,6 +300,7 @@ jobs:
             'VSR Info: NVIDIA RTX video super resolution is active.'
             'RTX HDR Info: NVIDIA RTX video HDR is active.'
             'FG Info: NVIDIA Video Frame Generation is active.'
+            'DLSS NR Info: NVIDIA DLSS NR is active.'
           ) -join "`r`n"
           Set-Content -LiteralPath (Join-Path $stage 'README.txt') -Value ($readme + "`r`n") -Encoding ascii
           $bytes = (Get-ChildItem -LiteralPath $stage -Recurse -File | Measure-Object -Property Length -Sum).Sum

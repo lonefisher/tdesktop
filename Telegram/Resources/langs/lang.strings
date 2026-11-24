@@ -933,6 +933,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 "lng_fishgram_rtx_hdr_about" = "On supported NVIDIA GPUs, this follows the RTX Video HDR setting in the NVIDIA app. It tone-maps SDR video while this window is on an HDR display, including together with super resolution. Turn it off here to keep normal playback. If the driver cannot enable it, playback stays the same.";
 "lng_fishgram_rtx_fg" = "NVIDIA video frame generation";
 "lng_fishgram_rtx_fg_about" = "In fullscreen or a large media-viewer window, playback can add frames up to the display refresh rate. This is NVIDIA Video Frame Generation, and it can run together with super resolution. It stays off until you turn it on. Playback is unchanged when the GPU or the Video Effects runtime cannot do it.";
+"lng_fishgram_dlss_nr" = "NVIDIA DLSS NR";
+"lng_fishgram_dlss_nr_about" = "On RTX GPUs, the media viewer can clean up a video after super resolution when it is fullscreen or the window's long side is at least 1280. Place the NVIDIA-signed nvngx_dlssnr.dll in an ngx folder next to Telegram.exe, or set FISHGRAM_NGX_RUNTIME to the folder that contains it. Picture-in-picture and in-chat video stay unchanged.";
 "lng_settings_enable_opengl" = "Enable OpenGL rendering for media";
 "lng_settings_angle_backend" = "ANGLE graphics backend";
 "lng_settings_angle_backend_auto" = "Auto";

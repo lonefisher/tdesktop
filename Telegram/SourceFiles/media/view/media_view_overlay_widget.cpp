@@ -72,6 +72,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "media/streaming/media_streaming_document.h"
 #include "media/streaming/media_streaming_player.h"
 #include "media/streaming/media_streaming_rtx_fg.h"
+#include "media/streaming/media_streaming_rtx_nr.h"
 #include "media/streaming/media_streaming_rtx_vsr.h"
 #include "media/view/media_view_video_enhance.h"
 #include "media/player/media_player_instance.h"
@@ -1019,6 +1020,8 @@ OverlayWidget::OverlayWidget()
 		scheduleFrameGeneration();
 		repaintVideo(false);
 	}, lifetime());
+	Streaming::RtxDlssNrEnabledValue(
+	) | rpl::skip(1) | rpl::on_next(repaintVideo, lifetime());
 
 	orderWidgets();
 }
@@ -1551,7 +1554,8 @@ QImage OverlayWidget::videoFrame() const {
 
 	if (Streaming::RtxVideoSuperResolutionEnabled()
 		|| Streaming::RtxVideoHdrEnabled()
-		|| Streaming::RtxVideoFrameGenerationEnabled()) {
+		|| Streaming::RtxVideoFrameGenerationEnabled()
+		|| Streaming::RtxDlssNrEnabled()) {
 		const auto info = videoFrameWithInfo();
 		if (info.format == Streaming::FrameFormat::ARGB32
 			&& !info.yuv
@@ -1580,8 +1584,8 @@ Streaming::FrameWithInfo OverlayWidget::videoFrameWithInfo(
 			.index = -2,
 			.alpha = _streamed->instance.info().video.alpha,
 		};
-	// Order: frame generation on the decoded picture, then VSR and HDR
-	// together. A generated frame is the picture those two enhance.
+	// Order: frame generation, then VSR+HDR in one blit, then DLSS NR.
+	// The HDR overlay is that blit, so NR does not run inside it.
 	const auto generated = frameGenerationPlan();
 	if (generated.decision == Streaming::RtxFgDecision::Interpolate) {
 		const auto anchors = _streamed->instance.interpolationAnchors();
@@ -1668,7 +1672,11 @@ Streaming::FrameWithInfo OverlayWidget::videoFrameWithInfo(
 		request.controlHoles = screenHoles;
 	}
 #endif // Q_OS_WIN
-	return Streaming::WithRtxEnhanced(std::move(info), request);
+	info = Streaming::WithRtxEnhanced(std::move(info), request);
+	return Streaming::WithRtxDlssNr(
+		std::move(info),
+		_fullscreen,
+		std::max(width(), height()));
 }
 
 Streaming::RtxFgPlan OverlayWidget::frameGenerationPlan() const {
@@ -1799,6 +1807,7 @@ void OverlayWidget::clearStreaming(bool savePosition) {
 	_streamed = nullptr;
 	_fgWaitSince = 0;
 	_frameGenerationTimer.cancel();
+	Streaming::RtxDlssNrNoteNewClip();
 }
 
 void OverlayWidget::documentUpdated(not_null<DocumentData*> document) {
@@ -5846,6 +5855,7 @@ void OverlayWidget::restartAtProgress(float64 progress) {
 void OverlayWidget::restartAtSeekPosition(crl::time position) {
 	Expects(_streamed != nullptr);
 
+	Streaming::RtxDlssNrNoteDiscontinuity();
 	if (videoShown()) {
 		_streamed->instance.saveFrameToCover();
 		const auto saved = base::take(_rotation);

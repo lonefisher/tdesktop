@@ -32,6 +32,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "info/info_memento.h"
 #include "lang/lang_keys.h"
 #include "media/streaming/media_streaming_rtx_fg.h"
+#include "media/streaming/media_streaming_rtx_nr.h"
 #include "media/streaming/media_streaming_rtx_vsr.h"
 #include "main/main_account.h"
 #include "main/main_domain.h"
@@ -1032,6 +1033,31 @@ void BuildPerformanceSection(SectionBuilder &builder) {
 			}, hdr->lifetime());
 		}
 		builder.addDividerText(tr::lng_fishgram_rtx_hdr_about());
+	}
+
+	if (Media::Streaming::RtxDlssNrSettingVisible()) {
+		const auto nr = builder.addButton({
+			.id = u"advanced/rtx_dlss_nr"_q,
+			.title = tr::lng_fishgram_dlss_nr(),
+			.st = &st::settingsButtonNoIcon,
+			.toggled = Media::Streaming::RtxDlssNrEnabledValue(),
+			.keywords = {
+				u"nvidia"_q,
+				u"dlss"_q,
+				u"nr"_q,
+				u"rtx"_q,
+				u"video"_q,
+			},
+		});
+		if (nr) {
+			nr->toggledValue(
+			) | rpl::filter([](bool enabled) {
+				return enabled != Media::Streaming::RtxDlssNrEnabled();
+			}) | rpl::on_next([=](bool enabled) {
+				Media::Streaming::RtxDlssNrSetEnabled(enabled);
+			}, nr->lifetime());
+		}
+		builder.addDividerText(tr::lng_fishgram_dlss_nr_about());
 	}
 
 #ifdef DESKTOP_APP_USE_ANGLE
