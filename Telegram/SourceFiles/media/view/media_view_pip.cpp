@@ -1433,6 +1433,10 @@ Ui::GL::ChosenRenderer Pip::chooseRenderer(
 }
 
 void Pip::paint(not_null<Renderer*> renderer) const {
+	if (!canUseVideoFrame()) {
+		Streaming::RtxHdrReleaseWindow(
+			quintptr(_panel.widget()->window()->winId()));
+	}
 	const auto controlsShown = _controlsShown.value(
 		(_over != OverState::None) ? 1. : 0.);
 	auto geometry = ContentGeometry{
@@ -1786,11 +1790,51 @@ Streaming::FrameWithInfo Pip::videoFrameWithInfo(
 		int(std::ceil(_panel.inner().height() * ratio)));
 	const auto rotation = (_rotation + _instance->info().video.rotation) % 360;
 	target = Streaming::RtxUnrotatedTarget(target, rotation);
-	return Streaming::WithRtxSuperResolution(
-		std::move(info),
-		target,
-		path,
-		quint64(reinterpret_cast<quintptr>(&*_instance)));
+	auto request = Streaming::RtxEnhanceRequest{
+		.targetPixels = target,
+		.videoTag = quint64(reinterpret_cast<quintptr>(&*_instance)),
+		.rotation = rotation,
+		.path = path,
+	};
+#if defined Q_OS_WIN
+	const auto host = _panel.widget()->window();
+	const auto panel = _panel.widget();
+	const auto inner = _panel.inner();
+	const auto logical = QRect(
+		panel->mapTo(host, inner.topLeft()),
+		inner.size());
+	request.windowId = quintptr(host->winId());
+	request.videoScreenPx = Streaming::RtxScreenRect(
+		request.windowId,
+		logical,
+		host->devicePixelRatioF());
+	const auto shown = _controlsShown.value(
+		(_over != OverState::None) ? 1. : 0.);
+	if (shown > 0.02) {
+		auto holes = QRegion();
+		const auto add = [&](QRect rect) {
+			if (!rect.isEmpty()) {
+				holes += rect;
+			}
+		};
+		add(_close.area);
+		add(_enlarge.area);
+		add(_play.icon);
+		add(_playback.area);
+		add(_volumeToggle.area);
+		add(_volumeController.area);
+		const auto origin = panel->mapTo(host, QPoint());
+		auto screenHoles = QRegion();
+		for (const auto &rect : holes) {
+			screenHoles += Streaming::RtxScreenRect(
+				request.windowId,
+				rect.translated(origin),
+				host->devicePixelRatioF());
+		}
+		request.controlHoles = screenHoles;
+	}
+#endif // Q_OS_WIN
+	return Streaming::WithRtxEnhanced(std::move(info), request);
 }
 
 QImage Pip::staticContent() const {

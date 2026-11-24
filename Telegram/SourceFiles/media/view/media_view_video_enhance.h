@@ -15,6 +15,8 @@ class PopupMenu;
 
 namespace Media::View {
 
-void FillVideoEnhanceMenu(not_null<Ui::PopupMenu*> menu);
+void FillVideoEnhanceMenu(
+	not_null<Ui::PopupMenu*> menu,
+	quintptr windowId);
 
 } // namespace Media::View

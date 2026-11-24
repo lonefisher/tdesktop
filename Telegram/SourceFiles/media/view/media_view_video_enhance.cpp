@@ -33,10 +33,35 @@ void AddSuperResolution(not_null<Ui::PopupMenu*> menu) {
 	action->setEnabled(state.available);
 }
 
+void AddVideoHdr(not_null<Ui::PopupMenu*> menu, quintptr windowId) {
+	const auto available = Streaming::RtxHdrShortcutAvailable(
+		Streaming::RtxVideoHdrSupported(),
+		Streaming::RtxWindowOnHdrDisplay(windowId));
+	const auto action = Menu::AddCheckedAction(
+		menu,
+		tr::lng_fishgram_rtx_hdr(tr::now),
+		[=] {
+			const auto allowed = Streaming::RtxHdrShortcutAvailable(
+				Streaming::RtxVideoHdrSupported(),
+				Streaming::RtxWindowOnHdrDisplay(windowId));
+			if (!allowed) {
+				return;
+			}
+			const auto next = !Streaming::RtxVideoHdrEnabled();
+			Streaming::RtxVideoHdrSetEnabled(next);
+		},
+		nullptr,
+		Streaming::RtxVideoHdrEnabled());
+	action->setEnabled(available);
+}
+
 } // namespace
 
-void FillVideoEnhanceMenu(not_null<Ui::PopupMenu*> menu) {
+void FillVideoEnhanceMenu(
+		not_null<Ui::PopupMenu*> menu,
+		quintptr windowId) {
 	AddSuperResolution(menu);
+	AddVideoHdr(menu, windowId);
 }
 
 } // namespace Media::View

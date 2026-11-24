@@ -208,6 +208,7 @@ struct FrameWithInfo {
 	int index = -1;
 	bool alpha = false;
 	int avPixelFormat = -1;
+	bool sourceHdr = false;
 };
 
 } // namespace Streaming

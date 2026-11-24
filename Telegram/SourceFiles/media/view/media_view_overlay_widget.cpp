@@ -31,6 +31,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/widgets/menu/menu_add_action_callback_factory.h"
 #include "ui/widgets/dropdown_menu.h"
 #include "ui/widgets/popup_menu.h"
+#include "styles/style_media_player.h"
 #include "ui/widgets/buttons.h"
 #include "ui/widgets/tooltip.h"
 #include "ui/wrap/padding_wrap.h"
@@ -998,12 +999,15 @@ OverlayWidget::OverlayWidget()
 
 	_dropdown->setHiddenCallback([this] { dropdownHidden(); });
 	_dropdownShowTimer.setCallback([=] { showDropdown(); });
-	Streaming::RtxVideoSuperResolutionEnabledValue(
-	) | rpl::skip(1) | rpl::on_next([=](bool) {
+	const auto repaintVideo = [=](bool) {
 		if (videoShown()) {
 			update();
 		}
-	}, lifetime());
+	};
+	Streaming::RtxVideoSuperResolutionEnabledValue(
+	) | rpl::skip(1) | rpl::on_next(repaintVideo, lifetime());
+	Streaming::RtxVideoHdrEnabledValue(
+	) | rpl::skip(1) | rpl::on_next(repaintVideo, lifetime());
 
 	orderWidgets();
 }
@@ -1534,7 +1538,8 @@ bool OverlayWidget::streamingRequiresControls() const {
 QImage OverlayWidget::videoFrame() const {
 	Expects(videoShown());
 
-	if (Streaming::RtxVideoSuperResolutionEnabled()) {
+	if (Streaming::RtxVideoSuperResolutionEnabled()
+		|| Streaming::RtxVideoHdrEnabled()) {
 		const auto info = videoFrameWithInfo();
 		if (info.format == Streaming::FrameFormat::ARGB32
 			&& !info.yuv
@@ -1572,11 +1577,65 @@ Streaming::FrameWithInfo OverlayWidget::videoFrameWithInfo(
 	const auto target = QSize(
 		int(std::ceil(geometry.rect.width() * ratio)),
 		int(std::ceil(geometry.rect.height() * ratio)));
-	return Streaming::WithRtxSuperResolution(
-		std::move(info),
-		target,
-		path,
-		quint64(streamedIndex()));
+	auto request = Streaming::RtxEnhanceRequest{
+		.targetPixels = target,
+		.videoTag = quint64(streamedIndex()),
+		.rotation = int(std::lround(geometry.rotation)),
+		.suspendHdr = (_menu != nullptr)
+			|| (_dropdown && !_dropdown->isHidden()),
+		.path = path,
+	};
+#if defined Q_OS_WIN
+	const auto top = widget()->window();
+	const auto placed = geometry.rect.toRect();
+	const auto logical = QRect(
+		widget()->mapTo(top, placed.topLeft()),
+		placed.size());
+	request.windowId = quintptr(top->winId());
+	request.videoScreenPx = Streaming::RtxScreenRect(
+		request.windowId,
+		logical,
+		top->devicePixelRatioF());
+	if (_controlsOpacity.current() > 0.02) {
+		auto holes = QRegion();
+		const auto add = [&](QRect rect) {
+			if (!rect.isEmpty()) {
+				holes += rect;
+			}
+		};
+		add(_bottomShadowRect);
+		add(_topShadowRect);
+		add(footerGeometry());
+		add(_captionRect);
+		add(_groupThumbsRect);
+		add(_leftNavOver);
+		add(_rightNavOver);
+		add(_saveNavOver);
+		add(_shareNavOver);
+		add(_rotateNavOver);
+		add(_moreNavOver);
+		add(_drawNavOver);
+		add(_recognizeNavOver);
+		add(_headerNav);
+		add(_nameNav);
+		add(_dateNav);
+		if (_streamed
+			&& _streamed->controls
+			&& !_streamed->controls->isHidden()) {
+			add(_streamed->controls->geometry());
+		}
+		const auto origin = widget()->mapTo(top, QPoint());
+		auto screenHoles = QRegion();
+		for (const auto &rect : holes) {
+			screenHoles += Streaming::RtxScreenRect(
+				request.windowId,
+				rect.translated(origin),
+				top->devicePixelRatioF());
+		}
+		request.controlHoles = screenHoles;
+	}
+#endif // Q_OS_WIN
+	return Streaming::WithRtxEnhanced(std::move(info), request);
 }
 
 QImage OverlayWidget::currentVideoFrameImage() const {
@@ -3307,6 +3366,7 @@ void OverlayWidget::dropdownHidden() {
 	if (!_controlsHideTimer.isActive()) {
 		hideControls(true);
 	}
+	update();
 }
 
 void OverlayWidget::handleScreenChanged(not_null<QScreen*> screen) {
@@ -6517,6 +6577,9 @@ Ui::GL::ChosenRenderer OverlayWidget::chooseRenderer(
 }
 
 void OverlayWidget::paint(not_null<Renderer*> renderer) {
+	if (!videoShown()) {
+		Streaming::RtxHdrReleaseWindow(quintptr(widget()->window()->winId()));
+	}
 	renderer->paintBackground();
 	if (contentShown()) {
 		if (videoShown()) {
@@ -8744,6 +8807,7 @@ bool OverlayWidget::handleContextMenu(std::optional<QPoint> position) {
 		_menu = nullptr;
 		return true;
 	}
+	Streaming::RtxHdrReleaseWindow(quintptr(widget()->window()->winId()));
 	if (_stories) {
 		_stories->menuShown(true);
 	}
@@ -8753,6 +8817,7 @@ bool OverlayWidget::handleContextMenu(std::optional<QPoint> position) {
 		}
 		activateControls();
 		_receiveMouse = false;
+		update();
 		InvokeQueued(_widget, [=] { receiveMouse(); });
 	}));
 
@@ -9073,10 +9138,11 @@ void OverlayWidget::addVideoEnhanceSubmenu(
 	if (!videoEnhanceAvailable()) {
 		return;
 	}
+	const auto windowId = quintptr(widget()->window()->winId());
 	addAction({
 		.text = tr::lng_fishgram_video_enhance(tr::now),
 		.fillSubmenu = [=](not_null<Ui::PopupMenu*> menu) {
-			FillVideoEnhanceMenu(menu);
+			FillVideoEnhanceMenu(menu, windowId);
 		},
 	});
 }
@@ -9100,8 +9166,10 @@ void OverlayWidget::showVideoMoreMenu() {
 	_menu->setDestroyedCallback(crl::guard(_widget, [=] {
 		dropdownHidden();
 		_receiveMouse = false;
+		update();
 		InvokeQueued(_widget, [=] { receiveMouse(); });
 	}));
+	Streaming::RtxHdrReleaseWindow(quintptr(widget()->window()->winId()));
 	_menu->popup(_widget->mapToGlobal(QPoint(width(), height())));
 	activateControls();
 }

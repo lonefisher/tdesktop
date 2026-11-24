@@ -984,6 +984,31 @@ void BuildPerformanceSection(SectionBuilder &builder) {
 		builder.addDividerText(tr::lng_fishgram_rtx_vsr_about());
 	}
 
+	if (Media::Streaming::RtxVideoHdrSupported()) {
+		const auto hdr = builder.addButton({
+			.id = u"advanced/rtx_hdr"_q,
+			.title = tr::lng_fishgram_rtx_hdr(),
+			.st = &st::settingsButtonNoIcon,
+			.toggled = Media::Streaming::RtxVideoHdrEnabledValue(),
+			.keywords = {
+				u"nvidia"_q,
+				u"rtx"_q,
+				u"hdr"_q,
+				u"truehdr"_q,
+				u"video"_q,
+			},
+		});
+		if (hdr) {
+			hdr->toggledValue(
+			) | rpl::filter([=](bool enabled) {
+				return enabled != Media::Streaming::RtxVideoHdrEnabled();
+			}) | rpl::on_next([=](bool enabled) {
+				Media::Streaming::RtxVideoHdrSetEnabled(enabled);
+			}, hdr->lifetime());
+		}
+		builder.addDividerText(tr::lng_fishgram_rtx_hdr_about());
+	}
+
 #ifdef DESKTOP_APP_USE_ANGLE
 	BuildANGLEOption(builder);
 #else

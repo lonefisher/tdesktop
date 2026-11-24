@@ -31,6 +31,22 @@ static_assert(kDisplaySkipped != kTimeUnknown);
 
 using ::Media::ValidFrameSize;
 
+[[nodiscard]] bool AvFrameIsHdr(const AVFrame *frame) {
+	if (!frame) {
+		return false;
+	}
+	if (frame->color_trc == AVCOL_TRC_SMPTE2084
+		|| frame->color_trc == AVCOL_TRC_ARIB_STD_B67) {
+		return true;
+	}
+	return av_frame_get_side_data(
+			frame,
+			AV_FRAME_DATA_MASTERING_DISPLAY_METADATA)
+		|| av_frame_get_side_data(
+			frame,
+			AV_FRAME_DATA_CONTENT_LIGHT_LEVEL);
+}
+
 [[nodiscard]] QSize RtxRequestTarget(
 		const FrameRequest &request,
 		int rotation) {
@@ -481,6 +497,7 @@ void VideoTrackObject::rasterizeFrame(not_null<Frame*> frame) {
 	fillRequests(frame);
 	frame->format = FrameFormat::None;
 	frame->nativeFrame = NativeFrame();
+	frame->sourceHdr = AvFrameIsHdr(frame->decoded.get());
 	if (frame->decoded->hw_frames_ctx) {
 #ifdef Q_OS_MAC
 		const auto hwFormat = frame->decoded->format;
@@ -536,6 +553,7 @@ void VideoTrackObject::rasterizeFrame(not_null<Frame*> frame) {
 		? frame->transferred.get()
 		: frame->decoded.get();
 	frame->avPixelFormat = int(frameWithData->format);
+	frame->sourceHdr = frame->sourceHdr || AvFrameIsHdr(frameWithData);
 	if ((frameWithData->format == AV_PIX_FMT_YUV420P
 		|| frameWithData->format == AV_PIX_FMT_NV12) && !requireARGB32()) {
 		const auto nv12 = (frameWithData->format == AV_PIX_FMT_NV12);
@@ -1275,6 +1293,7 @@ FrameWithInfo VideoTrack::frameWithInfo(
 		.format = FrameFormat::ARGB32,
 		.index = data.index,
 		.avPixelFormat = data.frame->avPixelFormat,
+		.sourceHdr = data.frame->sourceHdr,
 	};
 }
 
@@ -1297,6 +1316,7 @@ FrameWithInfo VideoTrack::frameWithInfo(const Instance *instance) {
 		.index = data.index,
 		.alpha = data.frame->alpha,
 		.avPixelFormat = data.frame->avPixelFormat,
+		.sourceHdr = data.frame->sourceHdr,
 	};
 }
 
@@ -1327,6 +1347,7 @@ QImage VideoTrack::superResolvedFrame(
 			.index = frame->index,
 			.alpha = frame->alpha,
 			.avPixelFormat = frame->avPixelFormat,
+			.sourceHdr = frame->sourceHdr,
 		},
 		target,
 		RtxVsrPath::Track,
