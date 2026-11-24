@@ -427,6 +427,8 @@ private:
 	void checkSingleViewMediaBurn();
 
 	void fillContextMenuActions(const Ui::Menu::MenuCallback &addAction);
+	void fillVideoEnhanceMenu(not_null<Ui::PopupMenu*> menu);
+	void showVideoEnhanceMenu();
 
 	void resizeCenteredControls();
 	void resizeContentByScreenSize();
@@ -819,6 +821,7 @@ private:
 	bool _mousePressed = false;
 
 	base::unique_qptr<Ui::PopupMenu> _menu;
+	base::unique_qptr<Ui::PopupMenu> _videoEnhanceMenu;
 	object_ptr<Ui::DropdownMenu> _dropdown;
 	base::Timer _dropdownShowTimer;
 

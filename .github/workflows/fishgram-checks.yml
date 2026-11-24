@@ -298,6 +298,12 @@ jobs:
             ''
             'VSR log line, in FishGramData\log.txt:'
             'VSR Info: NVIDIA RTX video super resolution is active.'
+            ''
+            'DLSS NR is off until Advanced, NVIDIA DLSS NR, or the viewer menu.'
+            'It does not bundle nvngx_dlssnr.dll. Put the NVIDIA-signed'
+            '310.8.0.0 file in an ngx folder next to Telegram.exe, or set'
+            'FISHGRAM_NGX_RUNTIME to that folder.'
+            'DLSS NR Info: NVIDIA DLSS NR is active.'
           ) -join "`r`n"
           Set-Content -LiteralPath (Join-Path $stage 'README.txt') -Value ($readme + "`r`n") -Encoding ascii
           $bytes = (Get-ChildItem -LiteralPath $stage -Recurse -File | Measure-Object -Property Length -Sum).Sum

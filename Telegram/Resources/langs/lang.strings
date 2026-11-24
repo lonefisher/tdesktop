@@ -928,6 +928,9 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 "lng_settings_enable_hwaccel" = "Hardware accelerated video decoding";
 "lng_fishgram_rtx_vsr" = "NVIDIA RTX video super resolution";
 "lng_fishgram_rtx_vsr_about" = "On supported NVIDIA GPUs, this follows the video super resolution setting in the NVIDIA app. Turn it off here to keep normal playback. If the driver cannot enable it, playback stays the same.";
+"lng_fishgram_dlss_nr" = "NVIDIA DLSS NR";
+"lng_fishgram_dlss_nr_about" = "On RTX GPUs, the media viewer can clean up a video after super resolution when it is fullscreen or the window's long side is at least 1280. Place the NVIDIA-signed nvngx_dlssnr.dll in an ngx folder next to Telegram.exe, or set FISHGRAM_NGX_RUNTIME to the folder that contains it. Picture-in-picture and in-chat video stay unchanged.";
+"lng_fishgram_video_enhance" = "视频增强";
 "lng_settings_enable_opengl" = "Enable OpenGL rendering for media";
 "lng_settings_angle_backend" = "ANGLE graphics backend";
 "lng_settings_angle_backend_auto" = "Auto";
