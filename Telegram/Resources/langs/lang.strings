@@ -928,6 +928,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 "lng_settings_enable_hwaccel" = "Hardware accelerated video decoding";
 "lng_fishgram_rtx_vsr" = "NVIDIA RTX video super resolution";
 "lng_fishgram_rtx_vsr_about" = "On supported NVIDIA GPUs, this follows the video super resolution setting in the NVIDIA app. Turn it off here to keep normal playback. If the driver cannot enable it, playback stays the same.";
+"lng_fishgram_video_enhance" = "视频增强";
 "lng_fishgram_rtx_hdr" = "NVIDIA RTX video HDR";
 "lng_fishgram_rtx_hdr_about" = "On supported NVIDIA GPUs, this follows the RTX Video HDR setting in the NVIDIA app. It tone-maps SDR video while this window is on an HDR display, including together with super resolution. Turn it off here to keep normal playback. If the driver cannot enable it, playback stays the same.";
 "lng_settings_enable_opengl" = "Enable OpenGL rendering for media";

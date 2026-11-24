@@ -11,6 +11,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "core/core_settings.h"
 #include "logs.h"
 
+#include "rpl/event_stream.h"
+
 #include <cmath>
 
 #if defined Q_OS_WIN
@@ -111,6 +113,10 @@ public:
 
 	void releaseWindow(quintptr windowId) {
 		hidePopup(reinterpret_cast<HWND>(windowId));
+	}
+
+	[[nodiscard]] bool displayIsHdr(quintptr windowId) {
+		return windowOnHdrDisplay(reinterpret_cast<HWND>(windowId));
 	}
 
 	[[nodiscard]] QImage enhance(
@@ -1399,6 +1405,10 @@ private:
 	[[nodiscard]] bool presentHdr(
 			const FrameWithInfo &frame,
 			const RtxEnhanceRequest &request) {
+		if (request.suspendHdr) {
+			hidePopup(reinterpret_cast<HWND>(request.windowId));
+			return false;
+		}
 		auto source = extract(frame);
 		source.size = evenSize(source.size);
 		const auto hwnd = reinterpret_cast<HWND>(request.windowId);
@@ -1704,6 +1714,35 @@ void RtxVideoHdrNoteToggled(bool enabled) {
 #if defined Q_OS_WIN
 	Processor::Instance().noteHdrToggledOn();
 	HdrEnabledLatch() = true;
+#endif // Q_OS_WIN
+}
+
+rpl::event_stream<bool> &HdrToggleStream() {
+	static auto stream = rpl::event_stream<bool>();
+	return stream;
+}
+
+rpl::producer<bool> RtxVideoHdrEnabledValue() {
+	return rpl::single(
+		RtxVideoHdrEnabled()
+	) | rpl::then(HdrToggleStream().events());
+}
+
+void RtxVideoHdrSetEnabled(bool enabled) {
+	if (enabled == RtxVideoHdrEnabled()) {
+		return;
+	}
+	Core::App().settings().writePref<bool>(kRtxVideoHdrPref, enabled);
+	Core::App().saveSettingsDelayed();
+	RtxVideoHdrNoteToggled(enabled);
+	HdrToggleStream().fire(enabled);
+}
+
+bool RtxWindowOnHdrDisplay(quintptr windowId) {
+#if defined Q_OS_WIN
+	return Processor::Instance().displayIsHdr(windowId);
+#else // Q_OS_WIN
+	return windowId == 0 && false;
 #endif // Q_OS_WIN
 }
 

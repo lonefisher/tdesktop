@@ -399,4 +399,11 @@ enum class RtxHdrSkipReason {
 	return plan;
 }
 
+// The player shortcut is shown but grayed out unless both are true.
+[[nodiscard]] inline bool RtxHdrShortcutAvailable(
+		bool supported,
+		bool displayHdr) {
+	return supported && displayHdr;
+}
+
 } // namespace Media::Streaming

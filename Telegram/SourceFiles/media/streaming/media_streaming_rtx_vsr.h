@@ -10,6 +10,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "media/streaming/media_streaming_common.h"
 #include "media/streaming/media_streaming_rtx_vsr_plan.h"
 
+#include "rpl/producer.h"
+
 #include <QRegion>
 
 namespace Media::Streaming {
@@ -19,7 +21,10 @@ namespace Media::Streaming {
 void RtxVideoSuperResolutionNoteToggled(bool enabled);
 
 [[nodiscard]] bool RtxVideoHdrEnabled();
+[[nodiscard]] rpl::producer<bool> RtxVideoHdrEnabledValue();
 [[nodiscard]] bool RtxVideoHdrSupported();
+[[nodiscard]] bool RtxWindowOnHdrDisplay(quintptr windowId);
+void RtxVideoHdrSetEnabled(bool enabled);
 void RtxVideoHdrNoteToggled(bool enabled);
 void RtxHdrReleaseWindow(quintptr windowId);
 
@@ -30,6 +35,7 @@ struct RtxEnhanceRequest {
 	QRegion controlHoles;
 	quint64 videoTag = 0;
 	int rotation = 0;
+	bool suspendHdr = false;
 
 };
 

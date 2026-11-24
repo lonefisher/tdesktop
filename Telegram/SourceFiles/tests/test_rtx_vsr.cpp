@@ -335,6 +335,11 @@ void TestHdrPlan() {
 	Check(vsr.decision == RtxVsrDecision::Upscale, "vsr still upscales");
 	Check(hdr.decision == RtxHdrDecision::ToneMap, "hdr runs with vsr");
 	Check(vsr.output == RtxVsrSize{ 3840, 2160 }, "vsr size unchanged");
+
+	Check(RtxHdrShortcutAvailable(true, true), "shortcut available");
+	Check(!RtxHdrShortcutAvailable(true, false), "shortcut needs hdr display");
+	Check(!RtxHdrShortcutAvailable(false, true), "shortcut needs the device");
+	Check(!RtxHdrShortcutAvailable(false, false), "shortcut needs both");
 }
 
 } // namespace

@@ -31,6 +31,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/widgets/menu/menu_add_action_callback_factory.h"
 #include "ui/widgets/dropdown_menu.h"
 #include "ui/widgets/popup_menu.h"
+#include "styles/style_media_player.h"
 #include "ui/widgets/buttons.h"
 #include "ui/widgets/tooltip.h"
 #include "ui/wrap/padding_wrap.h"
@@ -1571,6 +1572,8 @@ Streaming::FrameWithInfo OverlayWidget::videoFrameWithInfo() const {
 		.targetPixels = target,
 		.videoTag = quint64(streamedIndex()),
 		.rotation = int(std::lround(geometry.rotation)),
+		.suspendHdr = (_menu != nullptr)
+			|| (_dropdown && !_dropdown->isHidden()),
 	};
 #if defined Q_OS_WIN
 	const auto top = widget()->window();
@@ -2621,6 +2624,33 @@ void OverlayWidget::fillContextMenuActions(
 			_stories->reportRequested();
 		}, &st::mediaMenuIconReport);
 	}
+	if (videoShown()) {
+		const auto windowId = quintptr(widget()->window()->winId());
+		addAction({
+			.text = tr::lng_fishgram_video_enhance(tr::now),
+			.handler = nullptr,
+			.fillSubmenu = [=](not_null<Ui::PopupMenu*> menu) {
+				const auto available = Streaming::RtxHdrShortcutAvailable(
+					Streaming::RtxVideoHdrSupported(),
+					Streaming::RtxWindowOnHdrDisplay(windowId));
+				const auto checked = Streaming::RtxVideoHdrEnabled();
+				const auto action = menu->addAction(
+					tr::lng_fishgram_rtx_hdr(tr::now),
+					[=] {
+						if (!Streaming::RtxHdrShortcutAvailable(
+							Streaming::RtxVideoHdrSupported(),
+							Streaming::RtxWindowOnHdrDisplay(windowId))) {
+							return;
+						}
+						Streaming::RtxVideoHdrSetEnabled(
+							!Streaming::RtxVideoHdrEnabled());
+						update();
+					},
+					checked ? &st::mediaPlayerMenuCheck : nullptr);
+				action->setEnabled(available);
+			},
+		});
+	}
 }
 
 auto OverlayWidget::computeOverviewType() const
@@ -3353,6 +3383,7 @@ void OverlayWidget::dropdownHidden() {
 	if (!_controlsHideTimer.isActive()) {
 		hideControls(true);
 	}
+	update();
 }
 
 void OverlayWidget::handleScreenChanged(not_null<QScreen*> screen) {
@@ -8791,6 +8822,7 @@ bool OverlayWidget::handleContextMenu(std::optional<QPoint> position) {
 		_menu = nullptr;
 		return true;
 	}
+	Streaming::RtxHdrReleaseWindow(quintptr(widget()->window()->winId()));
 	if (_stories) {
 		_stories->menuShown(true);
 	}
@@ -8800,6 +8832,7 @@ bool OverlayWidget::handleContextMenu(std::optional<QPoint> position) {
 		}
 		activateControls();
 		_receiveMouse = false;
+		update();
 		InvokeQueued(_widget, [=] { receiveMouse(); });
 	}));
 
@@ -9109,14 +9142,24 @@ void OverlayWidget::receiveMouse() {
 }
 
 void OverlayWidget::showDropdown() {
-	_dropdown->clearActions();
-	fillContextMenuActions(Ui::Menu::CreateAddActionCallback(_dropdown));
-	_dropdown->moveToRight(0, height() - _dropdown->height());
-	_dropdown->showAnimated(Ui::PanelAnimation::Origin::BottomRight);
-	_dropdown->setFocus();
-	if (_stories) {
-		_stories->menuShown(true);
+	if (_menu) {
+		return;
 	}
+	Streaming::RtxHdrReleaseWindow(quintptr(widget()->window()->winId()));
+	_menu = base::make_unique_q<Ui::PopupMenu>(
+		_window,
+		st::mediaviewPopupMenu);
+	fillContextMenuActions(Ui::Menu::CreateAddActionCallback(_menu));
+	if (_menu->empty()) {
+		_menu = nullptr;
+		return;
+	}
+	_menu->setDestroyedCallback(crl::guard(_widget, [=] {
+		activateControls();
+		update();
+	}));
+	_menu->popup(widget()->mapToGlobal(_moreNav.bottomRight()));
+	activateControls();
 }
 
 void OverlayWidget::handleTouchTimer() {

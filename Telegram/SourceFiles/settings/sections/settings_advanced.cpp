@@ -993,15 +993,11 @@ void BuildPerformanceSection(SectionBuilder &builder) {
 	}
 
 	if (Media::Streaming::RtxVideoHdrSupported()) {
-		const auto pref = Media::Streaming::kRtxVideoHdrPref;
 		const auto hdr = builder.addButton({
 			.id = u"advanced/rtx_hdr"_q,
 			.title = tr::lng_fishgram_rtx_hdr(),
 			.st = &st::settingsButtonNoIcon,
-			.toggled = rpl::single(
-				Core::App().settings().readPref<bool>(
-					pref,
-					Media::Streaming::kRtxVideoHdrDefault)),
+			.toggled = Media::Streaming::RtxVideoHdrEnabledValue(),
 			.keywords = {
 				u"nvidia"_q,
 				u"rtx"_q,
@@ -1013,14 +1009,9 @@ void BuildPerformanceSection(SectionBuilder &builder) {
 		if (hdr) {
 			hdr->toggledValue(
 			) | rpl::filter([=](bool enabled) {
-				return enabled
-					!= Core::App().settings().readPref<bool>(
-						pref,
-						Media::Streaming::kRtxVideoHdrDefault);
+				return enabled != Media::Streaming::RtxVideoHdrEnabled();
 			}) | rpl::on_next([=](bool enabled) {
-				Core::App().settings().writePref<bool>(pref, enabled);
-				Core::App().saveSettingsDelayed();
-				Media::Streaming::RtxVideoHdrNoteToggled(enabled);
+				Media::Streaming::RtxVideoHdrSetEnabled(enabled);
 			}, hdr->lifetime());
 		}
 		builder.addDividerText(tr::lng_fishgram_rtx_hdr_about());
