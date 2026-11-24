@@ -1735,7 +1735,7 @@ void RtxVideoHdrSetEnabled(bool enabled) {
 	Core::App().settings().writePref<bool>(kRtxVideoHdrPref, enabled);
 	Core::App().saveSettingsDelayed();
 	RtxVideoHdrNoteToggled(enabled);
-	HdrToggleStream().fire(enabled);
+	HdrToggleStream().fire(bool(enabled));
 }
 
 bool RtxWindowOnHdrDisplay(quintptr windowId) {
