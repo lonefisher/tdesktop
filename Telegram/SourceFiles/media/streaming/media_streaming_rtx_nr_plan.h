@@ -205,6 +205,35 @@ struct RtxNrClock {
 	return RtxNrSkipReason::None;
 }
 
+struct RtxNrCreateBudget {
+	int failures = 0;
+	bool blocked = false;
+};
+
+[[nodiscard]] inline RtxNrCreateBudget NoteRtxNrCreateFailure(
+		RtxNrCreateBudget budget) {
+	++budget.failures;
+	if (budget.failures >= kRtxDlssNrFailureBudget) {
+		budget.blocked = true;
+	}
+	return budget;
+}
+
+enum class RtxNrHdrPlace {
+	AfterPaint,
+	BeforeHdrToneMap,
+};
+
+// HDR overlay tone-maps the SDR picture it is given. NR has to clean
+// that picture first, or the overlay shows a frame NR never saw.
+[[nodiscard]] inline RtxNrHdrPlace PlaceRtxNrRelativeToHdr(
+		bool hdrOverlay,
+		bool nrEnabled) {
+	return (hdrOverlay && nrEnabled)
+		? RtxNrHdrPlace::BeforeHdrToneMap
+		: RtxNrHdrPlace::AfterPaint;
+}
+
 inline void RtxNrBumpEpoch(RtxNrClock &clock) {
 	++clock.epoch;
 }

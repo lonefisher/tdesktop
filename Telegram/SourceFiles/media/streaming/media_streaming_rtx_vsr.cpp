@@ -7,6 +7,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "media/streaming/media_streaming_rtx_vsr.h"
 
+#include "media/streaming/media_streaming_rtx_nr.h"
+
 #include "core/application.h"
 #include "core/core_settings.h"
 #include "logs.h"
@@ -34,6 +36,11 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 namespace Media::Streaming {
 namespace {
+
+bool &HdrOverlayNr() {
+	static bool value = false;
+	return value;
+}
 
 struct PresentationNote {
 	const char *swap = "unknown";
@@ -364,7 +371,52 @@ public:
 			const RtxEnhanceRequest &request,
 			bool hdrEnabled,
 			bool vsrEnabled) {
-		if (hdrEnabled && presentHdr(frame, request)) {
+		HdrOverlayNr() = false;
+		auto cleanedHdr = false;
+		if (hdrEnabled
+			&& request.viewerNr
+			&& !request.suspendHdr
+			&& !frame.alpha
+			&& RtxDlssNrEnabled()) {
+			auto picture = frame;
+			auto vsrDone = false;
+			if (vsrEnabled) {
+				auto upscaled = upscale(
+					frame,
+					request.targetPixels,
+					request.path,
+					request.videoTag);
+				if (!upscaled.isNull()) {
+					picture.image = std::move(upscaled);
+					picture.yuv = nullptr;
+					picture.nativeFrame = nullptr;
+					picture.format = FrameFormat::ARGB32;
+					picture.alpha = false;
+					picture.avPixelFormat = -1;
+					vsrDone = true;
+				}
+			}
+			auto cleaned = RtxDlssNrImage(
+				picture,
+				request.viewerFullscreen,
+				request.viewerLongEdge);
+			if (!cleaned.isNull()) {
+				picture.image = std::move(cleaned);
+				picture.yuv = nullptr;
+				picture.nativeFrame = nullptr;
+				picture.format = FrameFormat::ARGB32;
+				picture.alpha = false;
+				picture.avPixelFormat = -1;
+				auto tone = request;
+				tone.toneMapOnly = vsrDone || !vsrEnabled;
+				cleanedHdr = true;
+				if (presentHdr(picture, tone)) {
+					HdrOverlayNr() = true;
+					return {};
+				}
+			}
+		}
+		if (!cleanedHdr && hdrEnabled && presentHdr(frame, request)) {
 			if (!vsrEnabled) {
 				upscale(
 					frame,
@@ -1788,7 +1840,8 @@ private:
 				request.targetPixels.width(),
 				request.targetPixels.height(),
 			});
-		const auto vsr = !RtxVsrBlocked(_session)
+		const auto vsr = !request.toneMapOnly
+			&& !RtxVsrBlocked(_session)
 			&& supported()
 			&& (outputs.count > 0);
 		auto output = vsr
@@ -2163,9 +2216,14 @@ QRect RtxScreenRect(
 	return rect;
 }
 
+bool RtxHdrOverlayIncludesNr() {
+	return HdrOverlayNr();
+}
+
 QImage RtxEnhancedImage(
 		const FrameWithInfo &frame,
 		const RtxEnhanceRequest &request) {
+	HdrOverlayNr() = false;
 	if (frame.format == FrameFormat::None) {
 		return {};
 	}

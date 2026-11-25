@@ -2733,6 +2733,9 @@ if (WIN32)
     endif()
 
     target_link_libraries(Telegram PRIVATE d3d11 d3d12 dxgi wintrust crypt32 version)
+    if (MSVC)
+        target_link_options(Telegram PRIVATE /DELAYLOAD:d3d12.dll)
+    endif()
 
     if (DESKTOP_APP_WIN7_BASELINE)
         # ANGLE loads d3dcompiler_47.dll from modules folder next to exe.

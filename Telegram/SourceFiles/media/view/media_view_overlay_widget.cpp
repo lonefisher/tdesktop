@@ -1584,8 +1584,6 @@ Streaming::FrameWithInfo OverlayWidget::videoFrameWithInfo(
 			.index = -2,
 			.alpha = _streamed->instance.info().video.alpha,
 		};
-	// Order: frame generation, then VSR+HDR in one blit, then DLSS NR.
-	// The HDR overlay is that blit, so NR does not run inside it.
 	const auto generated = frameGenerationPlan();
 	if (generated.decision == Streaming::RtxFgDecision::Interpolate) {
 		const auto anchors = _streamed->instance.interpolationAnchors();
@@ -1620,6 +1618,9 @@ Streaming::FrameWithInfo OverlayWidget::videoFrameWithInfo(
 		.rotation = int(std::lround(geometry.rotation)),
 		.suspendHdr = (_menu != nullptr)
 			|| (_dropdown && !_dropdown->isHidden()),
+		.viewerNr = true,
+		.viewerFullscreen = _fullscreen,
+		.viewerLongEdge = std::max(width(), height()),
 		.path = path,
 	};
 #if defined Q_OS_WIN
@@ -1673,6 +1674,9 @@ Streaming::FrameWithInfo OverlayWidget::videoFrameWithInfo(
 	}
 #endif // Q_OS_WIN
 	info = Streaming::WithRtxEnhanced(std::move(info), request);
+	if (Streaming::RtxHdrOverlayIncludesNr()) {
+		return info;
+	}
 	return Streaming::WithRtxDlssNr(
 		std::move(info),
 		_fullscreen,

@@ -51,9 +51,15 @@ struct RtxEnhanceRequest {
 	quint64 videoTag = 0;
 	int rotation = 0;
 	bool suspendHdr = false;
+	bool toneMapOnly = false;
+	bool viewerNr = false;
+	bool viewerFullscreen = false;
+	int viewerLongEdge = 0;
 	RtxVsrPath path = RtxVsrPath::Overlay;
 
 };
+
+[[nodiscard]] bool RtxHdrOverlayIncludesNr();
 
 [[nodiscard]] QRect RtxScreenRect(
 	quintptr windowId,

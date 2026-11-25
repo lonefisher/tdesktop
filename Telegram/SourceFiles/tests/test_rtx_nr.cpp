@@ -180,6 +180,43 @@ void TestGate() {
 	Check(PlanRtxDlssNr(alpha) == RtxNrSkipReason::Size, "alpha");
 }
 
+void TestCreateBudgetAndHdrPlace() {
+	auto budget = RtxNrCreateBudget();
+	budget = NoteRtxNrCreateFailure(budget);
+	budget = NoteRtxNrCreateFailure(budget);
+	Check(budget.failures == 2 && !budget.blocked, "two creates stay open");
+	budget = NoteRtxNrCreateFailure(budget);
+	Check(budget.failures == 3 && budget.blocked, "third create blocks");
+
+	auto early = Ready();
+	early.width = kRtxDlssNrMinEdge;
+	early.height = kRtxDlssNrMinEdge;
+	early.alpha = false;
+	Check(PlanRtxDlssNr(early) == RtxNrSkipReason::None, "early size passes");
+	auto odd = Ready();
+	odd.width = 1281;
+	Check(PlanRtxDlssNr(odd) == RtxNrSkipReason::Size, "real size after convert");
+	auto alpha = early;
+	alpha.alpha = true;
+	Check(PlanRtxDlssNr(alpha) == RtxNrSkipReason::Size, "alpha skips convert");
+	auto off = early;
+	off.enabled = false;
+	Check(PlanRtxDlssNr(off) == RtxNrSkipReason::Disabled, "off skips convert");
+
+	Check(
+		PlaceRtxNrRelativeToHdr(true, true) == RtxNrHdrPlace::BeforeHdrToneMap,
+		"nr before hdr tone map");
+	Check(
+		PlaceRtxNrRelativeToHdr(false, true) == RtxNrHdrPlace::AfterPaint,
+		"nr after paint without overlay");
+	Check(
+		PlaceRtxNrRelativeToHdr(true, false) == RtxNrHdrPlace::AfterPaint,
+		"hdr overlay without nr");
+	Check(
+		PlaceRtxNrRelativeToHdr(false, false) == RtxNrHdrPlace::AfterPaint,
+		"neither");
+}
+
 void TestHistory() {
 	auto clock = RtxNrClock();
 	Check(RtxNrTakeReset(clock), "first frame resets");
@@ -197,6 +234,7 @@ int main() {
 	TestIdentity();
 	TestSignatureAndPath();
 	TestGate();
+	TestCreateBudgetAndHdrPlace();
 	TestHistory();
 	if (Failed) {
 		std::fprintf(stderr, "rtx dlss nr plan tests failed: %d\n", Failed);
