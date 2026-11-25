@@ -314,6 +314,20 @@ struct NvidiaTrueHdrExtension {
 
 static_assert(sizeof(NvidiaTrueHdrExtension) == sizeof(UINT) * 3);
 
+LRESULT CALLBACK HdrPopupProc(
+		HWND hwnd,
+		UINT message,
+		WPARAM wparam,
+		LPARAM lparam) {
+	if (message == WM_NCHITTEST) {
+		return kHdrOverlayHitTransparent;
+	}
+	if (message == WM_MOUSEACTIVATE) {
+		return MA_NOACTIVATE;
+	}
+	return DefWindowProcW(hwnd, message, wparam, lparam);
+}
+
 #ifndef WS_EX_NOREDIRECTIONBITMAP
 #define WS_EX_NOREDIRECTIONBITMAP 0x00200000L
 #endif
@@ -1523,7 +1537,7 @@ private:
 		if (!_popupClass) {
 			WNDCLASSEXW windowClass = {};
 			windowClass.cbSize = sizeof(windowClass);
-			windowClass.lpfnWndProc = DefWindowProcW;
+			windowClass.lpfnWndProc = HdrPopupProc;
 			windowClass.hInstance = GetModuleHandleW(nullptr);
 			windowClass.lpszClassName = L"FishgramRtxHdr";
 			_popupClass = RegisterClassExW(&windowClass);

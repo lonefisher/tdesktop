@@ -234,6 +234,26 @@ enum class RtxNrHdrPlace {
 		: RtxNrHdrPlace::AfterPaint;
 }
 
+[[nodiscard]] inline bool VideoEnhanceMenuShows(bool playbackVisible) {
+	return playbackVisible;
+}
+
+inline constexpr int kHdrOverlayHitTransparent = -1;
+
+[[nodiscard]] inline bool EnhancementYieldsToInput(bool inputPending) {
+	return inputPending;
+}
+
+[[nodiscard]] inline int NextEnhancementWakeMs(int wakeInMs, int lastPaintMs) {
+	if (wakeInMs <= 0) {
+		return 0;
+	}
+	if (lastPaintMs >= 16 && wakeInMs < 16) {
+		return 16;
+	}
+	return wakeInMs;
+}
+
 inline void RtxNrBumpEpoch(RtxNrClock &clock) {
 	++clock.epoch;
 }

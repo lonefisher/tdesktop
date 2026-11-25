@@ -75,6 +75,16 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "media/streaming/media_streaming_rtx_nr.h"
 #include "media/streaming/media_streaming_rtx_vsr.h"
 #include "media/view/media_view_video_enhance.h"
+
+#if defined Q_OS_WIN
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
+#endif // Q_OS_WIN
 #include "media/player/media_player_instance.h"
 #include "history/history.h"
 #include "history/history_item_helpers.h"
@@ -1528,6 +1538,26 @@ bool OverlayWidget::showCopyMediaRestriction(bool skipPRemiumCheck) {
 	return true;
 }
 
+bool ViewerInputPending() {
+#if defined Q_OS_WIN
+	MSG message;
+	return PeekMessageW(
+			&message,
+			nullptr,
+			WM_KEYFIRST,
+			WM_KEYLAST,
+			PM_NOREMOVE)
+		|| PeekMessageW(
+			&message,
+			nullptr,
+			WM_MOUSEFIRST,
+			WM_MOUSELAST,
+			PM_NOREMOVE);
+#else // Q_OS_WIN
+	return false;
+#endif // Q_OS_WIN
+}
+
 bool OverlayWidget::videoShown() const {
 	return _streamed
 		&& _streamed->ready
@@ -1673,14 +1703,21 @@ Streaming::FrameWithInfo OverlayWidget::videoFrameWithInfo(
 		request.controlHoles = screenHoles;
 	}
 #endif // Q_OS_WIN
-	info = Streaming::WithRtxEnhanced(std::move(info), request);
-	if (Streaming::RtxHdrOverlayIncludesNr()) {
+	if (Streaming::EnhancementYieldsToInput(ViewerInputPending())) {
+		noteEnhanceSkipInput();
+		Streaming::RtxHdrReleaseWindow(quintptr(widget()->window()->winId()));
 		return info;
 	}
-	return Streaming::WithRtxDlssNr(
-		std::move(info),
-		_fullscreen,
-		std::max(width(), height()));
+	const auto started = crl::now();
+	info = Streaming::WithRtxEnhanced(std::move(info), request);
+	if (!Streaming::RtxHdrOverlayIncludesNr()) {
+		info = Streaming::WithRtxDlssNr(
+			std::move(info),
+			_fullscreen,
+			std::max(width(), height()));
+	}
+	_lastEnhanceMs = crl::now() - started;
+	return info;
 }
 
 Streaming::RtxFgPlan OverlayWidget::frameGenerationPlan() const {
@@ -1738,7 +1775,12 @@ void OverlayWidget::scheduleFrameGeneration() {
 	const auto plan = frameGenerationPlan();
 	const auto now = crl::now();
 	if (plan.nextWake > now) {
-		_frameGenerationTimer.callOnce(plan.nextWake - now);
+		const auto delay = Streaming::NextEnhancementWakeMs(
+			int(plan.nextWake - now),
+			int(_lastEnhanceMs));
+		if (delay > 0) {
+			_frameGenerationTimer.callOnce(delay);
+		}
 	}
 }
 
@@ -3386,6 +3428,7 @@ void OverlayWidget::toggleFullScreen() {
 void OverlayWidget::toggleFullScreen(bool fullscreen) {
 	_helper->clearState();
 	_fullscreen = fullscreen;
+	LOG(("Viewer Debug: fullscreen=%1").arg(fullscreen ? 1 : 0));
 	_windowed = !fullscreen;
 	initNormalGeometry();
 	if constexpr (Platform::IsMac()) {
@@ -7929,6 +7972,9 @@ void OverlayWidget::setZoomLevel(
 		ny = (_y - anchorY) * (-z + 1);
 	}
 	_zoom = newZoom;
+	LOG(("Viewer Debug: zoom=%1 fullscreen=%2"
+		).arg(_zoom
+		).arg(_fullscreen ? 1 : 0));
 	z = (_zoom == kZoomToScreenLevel) ? full : _zoom;
 	if (z > 0) {
 		_w = int(base::SafeRound(_w * (z + 1)));
@@ -8915,7 +8961,7 @@ bool OverlayWidget::handleContextMenu(std::optional<QPoint> position) {
 		_window,
 		st::mediaviewPopupMenu);
 	const auto addAction = Ui::Menu::CreateAddActionCallback(_menu);
-	addVideoEnhanceSubmenu(addAction);
+	addVideoEnhanceItems(addAction);
 	fillContextMenuActions(addAction);
 
 	if (_menu->empty()) {
@@ -9242,24 +9288,36 @@ void OverlayWidget::receiveMouse() {
 }
 
 bool OverlayWidget::videoEnhanceAvailable() const {
-	const auto story = _stories ? _stories->story() : nullptr;
-	const auto document = story ? story->document() : _document;
-	return document
-		&& (document->isVideoFile() || document->isVideoMessage());
+	return Streaming::VideoEnhanceMenuShows(videoShown());
 }
 
-void OverlayWidget::addVideoEnhanceSubmenu(
+void OverlayWidget::noteEnhanceSkipInput() {
+	const auto now = crl::now();
+	if (_enhanceInputSkipLogMs && now - _enhanceInputSkipLogMs < 1000) {
+		return;
+	}
+	_enhanceInputSkipLogMs = now;
+	LOG(("Enhance Debug: skip reason=input-pending"));
+}
+
+void OverlayWidget::addVideoEnhanceItems(
 		const Ui::Menu::MenuCallback &addAction) {
 	if (!videoEnhanceAvailable()) {
+		LOG(("Video enhance menu: skipped reason=not-playing"));
 		return;
 	}
 	const auto windowId = quintptr(widget()->window()->winId());
+	const auto menu = _menu.get();
+	if (!menu) {
+		LOG(("Video enhance menu: skipped reason=no-menu"));
+		return;
+	}
+	FillVideoEnhanceMenu(menu, windowId);
 	addAction({
-		.text = tr::lng_fishgram_video_enhance(tr::now),
-		.fillSubmenu = [=](not_null<Ui::PopupMenu*> menu) {
-			FillVideoEnhanceMenu(menu, windowId);
-		},
+		.separatorSt = &st::mediaviewMenuSeparator,
+		.isSeparator = true,
 	});
+	LOG(("Video enhance menu: items=4 playback=1"));
 }
 
 void OverlayWidget::showVideoMoreMenu() {
@@ -9269,7 +9327,7 @@ void OverlayWidget::showVideoMoreMenu() {
 	_menu->setForcedOrigin(Ui::PanelAnimation::Origin::BottomRight);
 	_menu->setForcedVerticalOrigin(Ui::PopupMenu::VerticalOrigin::Bottom);
 	const auto addAction = Ui::Menu::CreateAddActionCallback(_menu);
-	addVideoEnhanceSubmenu(addAction);
+	addVideoEnhanceItems(addAction);
 	fillContextMenuActions(addAction);
 	if (_menu->empty()) {
 		_menu = nullptr;
@@ -9285,7 +9343,7 @@ void OverlayWidget::showVideoMoreMenu() {
 		InvokeQueued(_widget, [=] { receiveMouse(); });
 	}));
 	Streaming::RtxHdrReleaseWindow(quintptr(widget()->window()->winId()));
-	_menu->popup(_widget->mapToGlobal(QPoint(width(), height())));
+	_menu->popup(_widget->mapToGlobal(_moreNav.bottomRight()));
 	activateControls();
 }
 

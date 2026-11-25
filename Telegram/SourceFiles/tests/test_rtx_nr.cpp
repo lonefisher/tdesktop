@@ -215,6 +215,15 @@ void TestCreateBudgetAndHdrPlace() {
 	Check(
 		PlaceRtxNrRelativeToHdr(false, false) == RtxNrHdrPlace::AfterPaint,
 		"neither");
+	Check(VideoEnhanceMenuShows(true), "playing video shows the switches");
+	Check(!VideoEnhanceMenuShows(false), "photo hides the switches");
+	Check(kHdrOverlayHitTransparent == -1, "overlay hit test is transparent");
+	Check(EnhancementYieldsToInput(true), "pending input skips enhancement");
+	Check(!EnhancementYieldsToInput(false), "idle frame may enhance");
+	Check(NextEnhancementWakeMs(0, 40) == 0, "no wake stays unscheduled");
+	Check(NextEnhancementWakeMs(1, 40) == 16, "slow frame waits");
+	Check(NextEnhancementWakeMs(30, 40) == 30, "later wake is kept");
+	Check(NextEnhancementWakeMs(1, 4) == 1, "fast frame can wake soon");
 }
 
 void TestHistory() {
