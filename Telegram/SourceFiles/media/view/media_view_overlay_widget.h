@@ -431,7 +431,7 @@ private:
 	void fillContextMenuActions(const Ui::Menu::MenuCallback &addAction);
 	void addVideoEnhanceItems(const Ui::Menu::MenuCallback &addAction);
 	void showVideoMoreMenu();
-	void noteEnhanceSkipInput();
+	void noteEnhanceSkipInput() const;
 	[[nodiscard]] bool videoEnhanceAvailable() const;
 
 	void resizeCenteredControls();
@@ -883,8 +883,8 @@ private:
 	base::Timer _frameStepThrottle;
 	base::Timer _frameGenerationTimer;
 	crl::time _fgWaitSince = 0;
-	crl::time _lastEnhanceMs = 0;
-	crl::time _enhanceInputSkipLogMs = 0;
+	mutable crl::time _lastEnhanceMs = 0;
+	mutable crl::time _enhanceInputSkipLogMs = 0;
 	int _frameStepPending = 0;
 	Ui::Animations::Basic _speedBoostTicker;
 	float64 _speedBoostPhase = 0.;

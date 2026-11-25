@@ -9291,7 +9291,7 @@ bool OverlayWidget::videoEnhanceAvailable() const {
 	return Streaming::VideoEnhanceMenuShows(videoShown());
 }
 
-void OverlayWidget::noteEnhanceSkipInput() {
+void OverlayWidget::noteEnhanceSkipInput() const {
 	const auto now = crl::now();
 	if (_enhanceInputSkipLogMs && now - _enhanceInputSkipLogMs < 1000) {
 		return;
