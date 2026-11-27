@@ -31,6 +31,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "info/downloads/info_downloads_widget.h"
 #include "info/info_memento.h"
 #include "lang/lang_keys.h"
+#include "media/streaming/media_streaming_rtx_fg.h"
+#include "media/streaming/media_streaming_rtx_nr.h"
 #include "media/streaming/media_streaming_rtx_vsr.h"
 #include "main/main_account.h"
 #include "main/main_domain.h"
@@ -959,15 +961,11 @@ void BuildPerformanceSection(SectionBuilder &builder) {
 	}
 
 	if (Media::Streaming::RtxVideoSuperResolutionSupported()) {
-		const auto pref = Media::Streaming::kRtxVideoSuperResolutionPref;
 		const auto vsr = builder.addButton({
 			.id = u"advanced/rtx_vsr"_q,
 			.title = tr::lng_fishgram_rtx_vsr(),
 			.st = &st::settingsButtonNoIcon,
-			.toggled = rpl::single(
-				Core::App().settings().readPref<bool>(
-					pref,
-					Media::Streaming::kRtxVideoSuperResolutionDefault)),
+			.toggled = Media::Streaming::RtxVideoSuperResolutionEnabledValue(),
 			.keywords = {
 				u"nvidia"_q,
 				u"rtx"_q,
@@ -980,16 +978,86 @@ void BuildPerformanceSection(SectionBuilder &builder) {
 			vsr->toggledValue(
 			) | rpl::filter([=](bool enabled) {
 				return enabled
-					!= Core::App().settings().readPref<bool>(
-						pref,
-						Media::Streaming::kRtxVideoSuperResolutionDefault);
+					!= Media::Streaming::RtxVideoSuperResolutionEnabled();
 			}) | rpl::on_next([=](bool enabled) {
-				Core::App().settings().writePref<bool>(pref, enabled);
-				Core::App().saveSettingsDelayed();
-				Media::Streaming::RtxVideoSuperResolutionNoteToggled(enabled);
+				Media::Streaming::SetRtxVideoSuperResolutionEnabled(enabled);
 			}, vsr->lifetime());
 		}
 		builder.addDividerText(tr::lng_fishgram_rtx_vsr_about());
+
+		const auto fg = builder.addButton({
+			.id = u"advanced/rtx_fg"_q,
+			.title = tr::lng_fishgram_rtx_fg(),
+			.st = &st::settingsButtonNoIcon,
+			.toggled = Media::Streaming::RtxVideoFrameGenerationEnabledValue(),
+			.keywords = {
+				u"nvidia"_q,
+				u"rtx"_q,
+				u"frame generation"_q,
+				u"interpolation"_q,
+				u"video"_q,
+			},
+		});
+		if (fg) {
+			fg->toggledValue(
+			) | rpl::filter([=](bool enabled) {
+				return enabled
+					!= Media::Streaming::RtxVideoFrameGenerationEnabled();
+			}) | rpl::on_next([=](bool enabled) {
+				Media::Streaming::SetRtxVideoFrameGenerationEnabled(enabled);
+			}, fg->lifetime());
+		}
+		builder.addDividerText(tr::lng_fishgram_rtx_fg_about());
+	}
+
+	if (Media::Streaming::RtxVideoHdrSupported()) {
+		const auto hdr = builder.addButton({
+			.id = u"advanced/rtx_hdr"_q,
+			.title = tr::lng_fishgram_rtx_hdr(),
+			.st = &st::settingsButtonNoIcon,
+			.toggled = Media::Streaming::RtxVideoHdrEnabledValue(),
+			.keywords = {
+				u"nvidia"_q,
+				u"rtx"_q,
+				u"hdr"_q,
+				u"truehdr"_q,
+				u"video"_q,
+			},
+		});
+		if (hdr) {
+			hdr->toggledValue(
+			) | rpl::filter([=](bool enabled) {
+				return enabled != Media::Streaming::RtxVideoHdrEnabled();
+			}) | rpl::on_next([=](bool enabled) {
+				Media::Streaming::RtxVideoHdrSetEnabled(enabled);
+			}, hdr->lifetime());
+		}
+		builder.addDividerText(tr::lng_fishgram_rtx_hdr_about());
+	}
+
+	if (Media::Streaming::RtxDlssNrSettingVisible()) {
+		const auto nr = builder.addButton({
+			.id = u"advanced/rtx_dlss_nr"_q,
+			.title = tr::lng_fishgram_dlss_nr(),
+			.st = &st::settingsButtonNoIcon,
+			.toggled = Media::Streaming::RtxDlssNrEnabledValue(),
+			.keywords = {
+				u"nvidia"_q,
+				u"dlss"_q,
+				u"nr"_q,
+				u"rtx"_q,
+				u"video"_q,
+			},
+		});
+		if (nr) {
+			nr->toggledValue(
+			) | rpl::filter([](bool enabled) {
+				return enabled != Media::Streaming::RtxDlssNrEnabled();
+			}) | rpl::on_next([=](bool enabled) {
+				Media::Streaming::RtxDlssNrSetEnabled(enabled);
+			}, nr->lifetime());
+		}
+		builder.addDividerText(tr::lng_fishgram_dlss_nr_about());
 	}
 
 #ifdef DESKTOP_APP_USE_ANGLE

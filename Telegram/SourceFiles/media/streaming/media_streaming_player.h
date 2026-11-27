@@ -71,6 +71,7 @@ public:
 		const Instance *instance = nullptr) const;
 	[[nodiscard]] FrameWithInfo frameWithInfo(
 		const Instance *instance = nullptr) const; // !requireARGB32
+	[[nodiscard]] InterpolationAnchors interpolationAnchors() const;
 
 	[[nodiscard]] QImage currentFrameImage() const; // Converts if needed.
 

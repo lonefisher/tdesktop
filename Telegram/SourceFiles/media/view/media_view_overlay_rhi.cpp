@@ -25,6 +25,26 @@ namespace {
 
 using namespace Ui::GL;
 
+[[nodiscard]] const char *SwapFormatName(QRhiRenderTarget *rt) {
+	const auto textureRt = dynamic_cast<QRhiTextureRenderTarget*>(rt);
+	if (!textureRt) {
+		return "unknown";
+	}
+	const auto desc = textureRt->description();
+	const auto begin = desc.cbeginColorAttachments();
+	const auto end = desc.cendColorAttachments();
+	if (begin == end || !begin->texture()) {
+		return "unknown";
+	}
+	switch (begin->texture()->format()) {
+	case QRhiTexture::RGBA16F: return "rgba16f";
+	case QRhiTexture::RGB10A2: return "rgb10a2";
+	case QRhiTexture::RGBA8: return "rgba8";
+	case QRhiTexture::BGRA8: return "bgra8";
+	default: return "other";
+	}
+}
+
 // The NDC Y flip stays at offset 12 in every block, see NdcFlipY().
 struct ImageUniforms {
 	float viewport[2];
@@ -554,6 +574,12 @@ void OverlayWidget::RendererRhi::render(
 	_rub = rhi->nextResourceUpdateBatch();
 	_pendingVideoStream = nullptr;
 
+	const auto pixels = rt->pixelSize();
+	Streaming::RtxNotePresentation(
+		SwapFormatName(rt),
+		pixels.width(),
+		pixels.height(),
+		float(_owner->widget()->devicePixelRatioF()));
 	_owner->paint(this);
 	if (!_initialized) {
 		return;
@@ -717,6 +743,7 @@ void OverlayWidget::RendererRhi::releaseResources() {
 	_chromaNV12 = false;
 	_usingExternalVideoTextures = false;
 	_trackFrameIndex = -1;
+	_trackedFrameFormat = -1;
 	_streamedIndex = 0;
 #ifdef Q_OS_MAC
 	_metalTextureCache.flush();
@@ -1129,7 +1156,9 @@ void OverlayWidget::RendererRhi::paintTransformedVideoFrame(
 	if (!_initialized) {
 		return;
 	}
-	const auto data = _owner->videoFrameWithInfo();
+	const auto data = _owner->videoFrameWithInfo(Streaming::RtxVsrPath::Rhi);
+	const auto formatChanged = (_trackedFrameFormat != int(data.format));
+	_trackedFrameFormat = int(data.format);
 	if (data.format == Streaming::FrameFormat::None) {
 		return;
 	} else if (data.format == Streaming::FrameFormat::ARGB32) {
@@ -1148,7 +1177,8 @@ void OverlayWidget::RendererRhi::paintTransformedVideoFrame(
 	const auto yuv = data.yuv;
 	const auto nv12changed = !nativeTexture && (_chromaNV12 != nv12);
 
-	const auto upload = (_trackFrameIndex != data.index)
+	const auto upload = formatChanged
+		|| (_trackFrameIndex != data.index)
 		|| (_streamedIndex != _owner->streamedIndex())
 		|| !_yTexture
 		|| (nv12 ? !_uvTexture : (!_uTexture || !_vTexture));

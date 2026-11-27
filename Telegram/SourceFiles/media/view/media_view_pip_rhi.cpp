@@ -24,6 +24,26 @@ namespace {
 
 using namespace Ui::GL;
 
+[[nodiscard]] const char *SwapFormatName(QRhiRenderTarget *rt) {
+	const auto textureRt = dynamic_cast<QRhiTextureRenderTarget*>(rt);
+	if (!textureRt) {
+		return "unknown";
+	}
+	const auto desc = textureRt->description();
+	const auto begin = desc.cbeginColorAttachments();
+	const auto end = desc.cendColorAttachments();
+	if (begin == end || !begin->texture()) {
+		return "unknown";
+	}
+	switch (begin->texture()->format()) {
+	case QRhiTexture::RGBA16F: return "rgba16f";
+	case QRhiTexture::RGB10A2: return "rgb10a2";
+	case QRhiTexture::RGBA8: return "rgba8";
+	case QRhiTexture::BGRA8: return "bgra8";
+	default: return "other";
+	}
+}
+
 struct PipUniforms {
 	float viewport[2];
 	float fragCoordYUp;
@@ -395,6 +415,12 @@ void Pip::RendererRhi::render(
 
 	_rub = rhi->nextResourceUpdateBatch();
 
+	const auto pixels = rt->pixelSize();
+	Streaming::RtxNotePresentation(
+		SwapFormatName(rt),
+		pixels.width(),
+		pixels.height(),
+		float(_owner->_panel.widget()->devicePixelRatioF()));
 	_owner->paint(this);
 	if (!_initialized) {
 		return;
@@ -534,7 +560,7 @@ void Pip::RendererRhi::paintTransformedVideoFrame(
 	if (!_initialized) {
 		return;
 	}
-	const auto data = _owner->videoFrameWithInfo();
+	const auto data = _owner->videoFrameWithInfo(Streaming::RtxVsrPath::Rhi);
 	if (data.format == Streaming::FrameFormat::None) {
 		return;
 	}

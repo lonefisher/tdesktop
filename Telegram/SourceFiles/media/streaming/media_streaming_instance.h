@@ -81,6 +81,7 @@ public:
 	[[nodiscard]] FrameWithInfo frameWithInfo(
 		const FrameRequest &request) const;
 	[[nodiscard]] FrameWithInfo frameWithInfo() const;
+	[[nodiscard]] InterpolationAnchors interpolationAnchors() const;
 	bool markFrameShown() const;
 
 	void lockPlayer();

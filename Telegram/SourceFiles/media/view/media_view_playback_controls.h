@@ -10,6 +10,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/rp_widget.h"
 #include "base/object_ptr.h"
 #include "media/media_common.h"
+#include "media/view/media_view_enhance_bar.h"
 
 namespace Ui {
 class CrossFadeLabel;
@@ -28,6 +29,7 @@ class SpeedController;
 
 namespace Media::View {
 
+class EnhanceToggle;
 class PlaybackProgress;
 
 class PlaybackControls : public Ui::RpWidget {
@@ -72,6 +74,8 @@ public:
 	void setLoadingProgress(int64 ready, int64 total);
 	void setTimestamps(std::vector<TimestampData> timestamps);
 	void setInFullScreen(bool inFullScreen);
+	void setVideoEnhanceVisible(bool visible);
+	[[nodiscard]] bool acceptsHdrCutout() const;
 	void updatePlaybackSpeed(float64 speed);
 	void updateSpeedToggleQuality();
 	[[nodiscard]] bool hasTimestamps() const;
@@ -101,6 +105,10 @@ private:
 
 	void updateVolumeToggleIcon();
 	void updateDownloadProgressPosition();
+	void refreshEnhanceToggles();
+	void toggleEnhance(EnhanceKind kind);
+	void applyEnhanceGeometry();
+	[[nodiscard]] EnhanceToggleModel enhanceModel(EnhanceKind kind) const;
 
 	void updatePlayPauseResumeState(const Player::TrackState &state);
 	void updateTimeTexts(const Player::TrackState &state);
@@ -120,6 +128,8 @@ private:
 	bool _inFullScreen = false;
 	bool _showPause = false;
 	bool _childrenHidden = false;
+	bool _enhanceVisible = false;
+	crl::time _enhanceRefreshMs = 0;
 	QString _timeAlready, _timeLeft;
 	crl::time _seekPositionMs = -1;
 	crl::time _lastDurationMs = 0;
@@ -136,6 +146,11 @@ private:
 	object_ptr<Player::SettingsButton> _speedToggle;
 	object_ptr<Ui::IconButton> _fullScreenToggle;
 	object_ptr<Ui::IconButton> _pictureInPicture;
+	object_ptr<EnhanceToggle> _enhanceVsr = { nullptr };
+	object_ptr<EnhanceToggle> _enhanceHdr = { nullptr };
+	object_ptr<EnhanceToggle> _enhanceFg = { nullptr };
+	object_ptr<EnhanceToggle> _enhanceNr = { nullptr };
+	EnhanceBarLayout _enhanceLayout;
 	object_ptr<Ui::LabelSimple> _playedAlready;
 	object_ptr<Ui::LabelSimple> _toPlayLeft;
 	object_ptr<Ui::LabelSimple> _downloadProgress = { nullptr };

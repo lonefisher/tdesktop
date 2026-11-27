@@ -17,7 +17,9 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "data/data_web_page.h"
 #include "data/data_cloud_themes.h" // Data::CloudTheme.
 #include "media/stories/media_stories_delegate.h"
+#include "media/streaming/media_streaming_rtx_fg_plan.h"
 #include "media/view/media_view_playback_controls.h"
+#include "media/streaming/media_streaming_rtx_vsr.h"
 #include "media/view/media_view_open_common.h"
 #include "media/view/media_view_recognition_selection.h"
 #include "media/media_common.h"
@@ -427,6 +429,10 @@ private:
 	void checkSingleViewMediaBurn();
 
 	void fillContextMenuActions(const Ui::Menu::MenuCallback &addAction);
+	void addVideoEnhanceItems(const Ui::Menu::MenuCallback &addAction);
+	void showVideoMoreMenu();
+	void noteEnhanceSkipInput() const;
+	[[nodiscard]] bool videoEnhanceAvailable() const;
 
 	void resizeCenteredControls();
 	void resizeContentByScreenSize();
@@ -454,6 +460,8 @@ private:
 		std::optional<QPoint> anchor = std::nullopt);
 
 	void updatePlaybackState();
+	void scheduleFrameGeneration();
+	[[nodiscard]] Streaming::RtxFgPlan frameGenerationPlan() const;
 	void refreshSystemMediaControls();
 	void finishSystemMediaControls();
 	[[nodiscard]] QImage systemMediaControlsThumbnail() const;
@@ -600,7 +608,8 @@ private:
 	[[nodiscard]] bool streamingRequiresControls() const;
 	[[nodiscard]] QImage videoFrame() const; // ARGB (changes prepare format)
 	[[nodiscard]] QImage currentVideoFrameImage() const; // RGB (may convert)
-	[[nodiscard]] Streaming::FrameWithInfo videoFrameWithInfo() const; // YUV
+	[[nodiscard]] Streaming::FrameWithInfo videoFrameWithInfo(
+		Streaming::RtxVsrPath path = Streaming::RtxVsrPath::Overlay) const;
 	[[nodiscard]] int streamedIndex() const;
 	[[nodiscard]] QImage transformedShownContent() const;
 	[[nodiscard]] QImage transformShownContent(
@@ -872,6 +881,10 @@ private:
 	Ui::Animations::Simple _speedBoostAnimation;
 	base::Timer _speedBoostHoldTimer;
 	base::Timer _frameStepThrottle;
+	base::Timer _frameGenerationTimer;
+	crl::time _fgWaitSince = 0;
+	mutable crl::time _lastEnhanceMs = 0;
+	mutable crl::time _enhanceInputSkipLogMs = 0;
 	int _frameStepPending = 0;
 	Ui::Animations::Basic _speedBoostTicker;
 	float64 _speedBoostPhase = 0.;

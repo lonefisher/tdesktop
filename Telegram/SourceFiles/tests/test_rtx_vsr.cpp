@@ -25,6 +25,33 @@ void Check(bool ok, const char *name) {
 
 using namespace Media::Streaming;
 
+void TestSharedToggle() {
+	const auto missing = RtxBoolPrefEnabled(false, false);
+	const auto storedOn = RtxBoolPrefEnabled(true, true);
+	const auto storedOff = RtxBoolPrefEnabled(true, false);
+	const auto onRow = RtxVsrToggleState(storedOn, true);
+	const auto offRow = RtxVsrToggleState(storedOff, true);
+	const auto gray = RtxVsrToggleState(storedOn, false);
+	const auto defaultRow = RtxVsrToggleState(missing, true);
+
+	Check(missing, "missing pref is the settings default");
+	Check(onRow.checked && onRow.available, "settings on is a checked row");
+	Check(!offRow.checked && offRow.available, "settings off is unchecked");
+	Check(defaultRow.checked, "viewer row follows the default");
+	Check(gray.checked && !gray.available, "unsupported stays checked and gray");
+	Check(!RtxVsrStoredAfterToggle(storedOn, true), "menu off matches settings off");
+	Check(RtxVsrStoredAfterToggle(storedOff, true), "menu on matches settings on");
+	Check(
+		RtxVsrStoredAfterToggle(missing, true) == !missing,
+		"default toggle writes the opposite");
+	Check(
+		RtxVsrStoredAfterToggle(storedOn, false) == storedOn,
+		"gray row does not write");
+	Check(
+		RtxVsrStoredAfterToggle(storedOff, false) == storedOff,
+		"gray off stays off");
+}
+
 void TestPrefAndAdapter() {
 	Check(
 		std::string(kRtxVideoSuperResolutionPref)
@@ -98,7 +125,8 @@ void TestPlan() {
 		false,
 		{ 641, 361 },
 		{ 1280, 720 });
-	Check(odd.decision == RtxVsrDecision::Skip, "odd source skips");
+	Check(odd.decision == RtxVsrDecision::Upscale, "odd source is cropped");
+	Check(odd.output == RtxVsrSize{ 1280, 720 }, "odd crop is 2x");
 
 	const auto tiny = PlanRtxVideoSuperResolution(
 		true,
@@ -145,6 +173,71 @@ void TestPlan() {
 	Check(outputs.count == 2, "fallback count");
 	Check(outputs.sizes[0] == RtxVsrSize{ 3840, 2160 }, "primary 4k");
 	Check(outputs.sizes[1] == RtxVsrSize{ 2560, 1440 }, "fallback 1440p");
+}
+
+void Test720pAndRejectReasons() {
+	const auto hd = PlanRtxVideoSuperResolution(
+		true,
+		true,
+		false,
+		{ 1280, 720 },
+		{ 3840, 2160 });
+	Check(hd.decision == RtxVsrDecision::Upscale, "720p to 4k upscales");
+	Check(hd.output == RtxVsrSize{ 3840, 2160 }, "720p to 4k is 3x");
+	Check(hd.output.width == 1280 * 3, "720p width scale is 3");
+	Check(hd.output.height == 720 * 3, "720p height scale is 3");
+
+	const auto fullHd = PlanRtxVideoSuperResolution(
+		true,
+		true,
+		false,
+		{ 1920, 1080 },
+		{ 3840, 2160 });
+	Check(fullHd.decision == RtxVsrDecision::Upscale, "1080p to 4k upscales");
+	Check(fullHd.output == RtxVsrSize{ 3840, 2160 }, "1080p to 4k is 2x");
+
+	const auto oddHd = PlanRtxVideoSuperResolution(
+		true,
+		true,
+		false,
+		{ 1281, 721 },
+		{ 3840, 2160 });
+	Check(oddHd.decision == RtxVsrDecision::Upscale, "odd 720p still upscales");
+	Check(oddHd.output == RtxVsrSize{ 3840, 2160 }, "odd 720p crops to 3x");
+
+	Check(
+		RtxVsrRejectReasonFor({ 1280, 720 }, { 3840, 2160 })
+			== RtxVsrRejectReason::None,
+		"720p reason none");
+	Check(
+		RtxVsrRejectReasonFor({ 1280, 720 }, {})
+			== RtxVsrRejectReason::EmptyTarget,
+		"empty target");
+	Check(
+		std::string(RtxVsrRejectReasonName(RtxVsrRejectReason::EmptyTarget))
+			== "empty-target",
+		"empty target name");
+	Check(
+		RtxVsrRejectReasonFor({ 1280, 720 }, { 1280, 720 })
+			== RtxVsrRejectReason::TargetNotLarger,
+		"same size");
+	Check(
+		RtxVsrRejectReasonFor({ 1280, 720 }, { 1920, 720 })
+			== RtxVsrRejectReason::OneSide,
+		"one side");
+	Check(
+		RtxVsrRejectReasonFor({ 32, 720 }, { 3840, 2160 })
+			== RtxVsrRejectReason::TinySource,
+		"tiny edge");
+	Check(
+		RtxVsrRejectReasonFor({ 3840, 2160 }, { 7680, 4320 })
+			== RtxVsrRejectReason::AlreadyLarge,
+		"4k source stays large");
+	Check(
+		RtxEvenSize({ 1281, 721 }) == RtxVsrSize{ 1280, 720 },
+		"even crop");
+	const auto collapsed = RtxVsrRejectReasonFor({ 100, 100 }, { 101, 200 });
+	Check(collapsed == RtxVsrRejectReason::EvenFit, "even fit collapses");
 }
 
 void TestFallbackList() {
@@ -209,14 +302,150 @@ void TestPackAndBlank() {
 	Check(!RtxOutputRejectedAsBlank(200, 1), "visible output kept");
 }
 
+void TestHdrPlan() {
+	Check(
+		std::string(kRtxVideoHdrPref) == "fishgram/rtx_video_hdr",
+		"hdr pref key");
+	Check(kRtxVideoHdrDefault, "hdr default follows the driver");
+	Check(
+		RtxBoolPrefEnabled(false, false, kRtxVideoHdrDefault),
+		"missing hdr pref stays on");
+	Check(
+		!RtxBoolPrefEnabled(true, false, kRtxVideoHdrDefault),
+		"stored hdr off stays off");
+	Check(
+		RtxBoolPrefEnabled(true, true, kRtxVideoHdrDefault),
+		"stored hdr on stays on");
+
+	const auto apply = PlanRtxVideoHdr(
+		RtxBoolPrefEnabled(false, false, kRtxVideoHdrDefault),
+		true,
+		false,
+		true,
+		false,
+		false,
+		false);
+	Check(apply.decision == RtxHdrDecision::ToneMap, "sdr on hdr display");
+	Check(
+		RtxHdrSkipReasonFor(true, true, false, true, false, false, false)
+			== RtxHdrSkipReason::None,
+		"hdr reason none");
+
+	const auto sameSize = PlanRtxVideoHdr(
+		true, true, false, true, false, false, false);
+	Check(
+		sameSize.decision == RtxHdrDecision::ToneMap,
+		"hdr does not need an upscale");
+
+	const auto off = PlanRtxVideoHdr(
+		RtxBoolPrefEnabled(true, false, kRtxVideoHdrDefault),
+		true,
+		false,
+		true,
+		false,
+		false,
+		false);
+	Check(off.decision == RtxHdrDecision::Skip, "hdr off skips");
+	Check(
+		RtxHdrSkipReasonFor(false, true, false, true, false, false, false)
+			== RtxHdrSkipReason::Disabled,
+		"disabled wins");
+
+	Check(
+		PlanRtxVideoHdr(true, false, false, true, false, false, false)
+			.decision == RtxHdrDecision::Skip,
+		"hdr unsupported skips");
+	Check(
+		RtxHdrSkipReasonFor(true, false, false, true, false, false, false)
+			== RtxHdrSkipReason::Unsupported,
+		"unsupported reason");
+
+	Check(
+		PlanRtxVideoHdr(true, true, true, true, false, false, false)
+			.decision == RtxHdrDecision::Skip,
+		"hdr blocked skips");
+	Check(
+		RtxHdrSkipReasonFor(true, true, true, true, false, false, false)
+			== RtxHdrSkipReason::Blocked,
+		"blocked reason");
+
+	Check(
+		PlanRtxVideoHdr(true, true, false, false, false, false, false)
+			.decision == RtxHdrDecision::Skip,
+		"sdr display skips");
+	Check(
+		RtxHdrSkipReasonFor(true, true, false, false, false, false, false)
+			== RtxHdrSkipReason::DisplaySdr,
+		"display-sdr reason");
+
+	Check(
+		PlanRtxVideoHdr(true, true, false, true, true, false, false)
+			.decision == RtxHdrDecision::Skip,
+		"hdr source skips");
+	Check(
+		RtxHdrSkipReasonFor(true, true, false, true, true, false, false)
+			== RtxHdrSkipReason::SourceHdr,
+		"source-hdr reason");
+
+	Check(
+		PlanRtxVideoHdr(true, true, false, true, false, true, false)
+			.decision == RtxHdrDecision::Skip,
+		"rotated skips");
+	Check(
+		RtxHdrSkipReasonFor(true, true, false, true, false, true, false)
+			== RtxHdrSkipReason::Rotated,
+		"rotated reason");
+
+	Check(
+		PlanRtxVideoHdr(true, true, false, true, false, false, true)
+			.decision == RtxHdrDecision::Skip,
+		"alpha skips hdr");
+	Check(
+		RtxHdrSkipReasonFor(true, true, false, true, false, false, true)
+			== RtxHdrSkipReason::Alpha,
+		"alpha reason");
+
+	Check(
+		std::string(RtxHdrSkipReasonName(RtxHdrSkipReason::DisplaySdr))
+			== "display-sdr",
+		"display-sdr name");
+	Check(
+		std::string(RtxHdrSkipReasonName(RtxHdrSkipReason::SourceHdr))
+			== "source-hdr",
+		"source-hdr name");
+	Check(
+		std::string(RtxHdrSkipReasonName(RtxHdrSkipReason::None)) == "none",
+		"none name");
+
+	const auto vsr = PlanRtxVideoSuperResolution(
+		true,
+		true,
+		false,
+		{ 1280, 720 },
+		{ 3840, 2160 });
+	const auto hdr = PlanRtxVideoHdr(
+		true, true, false, true, false, false, false);
+	Check(vsr.decision == RtxVsrDecision::Upscale, "vsr still upscales");
+	Check(hdr.decision == RtxHdrDecision::ToneMap, "hdr runs with vsr");
+	Check(vsr.output == RtxVsrSize{ 3840, 2160 }, "vsr size unchanged");
+
+	Check(RtxHdrShortcutAvailable(true, true), "shortcut available");
+	Check(!RtxHdrShortcutAvailable(true, false), "shortcut needs hdr display");
+	Check(!RtxHdrShortcutAvailable(false, true), "shortcut needs the device");
+	Check(!RtxHdrShortcutAvailable(false, false), "shortcut needs both");
+}
+
 } // namespace
 
 int main() {
+	TestSharedToggle();
 	TestPrefAndAdapter();
 	TestPlan();
+	Test720pAndRejectReasons();
 	TestFallbackList();
 	TestSession();
 	TestPackAndBlank();
+	TestHdrPlan();
 	if (Failed) {
 		std::fprintf(stderr, "%d checks failed\n", Failed);
 		return 1;

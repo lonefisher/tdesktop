@@ -62,6 +62,7 @@ public:
 		const FrameRequest &request,
 		const Instance *instance);
 	[[nodiscard]] FrameWithInfo frameWithInfo(const Instance *instance);
+	[[nodiscard]] InterpolationAnchors interpolationAnchors();
 	[[nodiscard]] QImage currentFrameImage();
 	void unregisterInstance(not_null<const Instance*> instance);
 	[[nodiscard]] rpl::producer<> checkNextFrame() const;
@@ -90,11 +91,13 @@ private:
 		crl::time displayed = kTimeUnknown;
 		crl::time display = kTimeUnknown;
 		FrameFormat format = FrameFormat::None;
+		int avPixelFormat = -1;
 
 		base::flat_map<const Instance*, Prepared> prepared;
 
 		int index = 0;
 		bool alpha = false;
+		bool sourceHdr = false;
 	};
 	struct FrameWithIndex {
 		not_null<Frame*> frame;
@@ -116,7 +119,11 @@ private:
 		};
 
 		// Called from the wrapped object queue.
-		void init(QImage &&cover, bool hasAlpha, crl::time position);
+		void init(
+			QImage &&cover,
+			bool hasAlpha,
+			crl::time position,
+			int avPixelFormat);
 		[[nodiscard]] bool initialized() const;
 
 		[[nodiscard]] PrepareState prepareState(
@@ -139,6 +146,12 @@ private:
 		[[nodiscard]] crl::time nextFrameDisplayTime() const;
 		[[nodiscard]] not_null<Frame*> frameForPaint();
 		[[nodiscard]] FrameWithIndex frameForPaintWithIndex();
+		struct InterpolationPeek {
+			bool valid = false;
+			Frame *previous = nullptr;
+			Frame *next = nullptr;
+		};
+		[[nodiscard]] InterpolationPeek interpolationPeek();
 
 	private:
 		[[nodiscard]] not_null<Frame*> getFrame(int index);

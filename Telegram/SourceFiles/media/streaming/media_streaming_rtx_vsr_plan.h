@@ -16,6 +16,8 @@ namespace Media::Streaming {
 inline constexpr auto kRtxVideoSuperResolutionPref
 	= "fishgram/rtx_video_super_resolution";
 inline constexpr auto kRtxVideoSuperResolutionDefault = true;
+inline constexpr auto kRtxVideoHdrPref = "fishgram/rtx_video_hdr";
+inline constexpr auto kRtxVideoHdrDefault = true;
 
 // Any NVIDIA adapter. Device id is intentionally not part of the check.
 inline constexpr auto kRtxNvidiaVendorId = 0x10DEu;
@@ -84,8 +86,32 @@ struct RtxVsrSession {
 }
 
 // A missing pref uses the default. An empty stored value is an explicit off.
-[[nodiscard]] inline bool RtxBoolPrefEnabled(bool present, bool nonEmpty) {
-	return present ? nonEmpty : kRtxVideoSuperResolutionDefault;
+[[nodiscard]] inline bool RtxBoolPrefEnabled(
+		bool present,
+		bool nonEmpty,
+		bool fallback = kRtxVideoSuperResolutionDefault) {
+	return present ? nonEmpty : fallback;
+}
+
+struct RtxVsrToggle {
+	bool checked = false;
+	bool available = false;
+};
+
+[[nodiscard]] inline RtxVsrToggle RtxVsrToggleState(
+		bool storedEnabled,
+		bool supported) {
+	return {
+		.checked = storedEnabled,
+		.available = supported,
+	};
+}
+
+// A gray row does not change the stored bit the settings switch reads.
+[[nodiscard]] inline bool RtxVsrStoredAfterToggle(
+		bool storedEnabled,
+		bool supported) {
+	return supported ? !storedEnabled : storedEnabled;
 }
 
 [[nodiscard]] inline bool RtxVsrBlocked(RtxVsrSession session) {
@@ -120,6 +146,41 @@ struct RtxVsrSession {
 
 [[nodiscard]] inline int RtxLongEdge(RtxVsrSize size) {
 	return (size.width > size.height) ? size.width : size.height;
+}
+
+// NV12 needs an even coded size. One extra coded row or column is cropped.
+[[nodiscard]] inline RtxVsrSize RtxEvenSize(RtxVsrSize size) {
+	if (size.width > 0 && (size.width % 2)) {
+		--size.width;
+	}
+	if (size.height > 0 && (size.height % 2)) {
+		--size.height;
+	}
+	return size;
+}
+
+enum class RtxVsrRejectReason {
+	None,
+	EmptyTarget,
+	TinySource,
+	TargetNotLarger,
+	OneSide,
+	AlreadyLarge,
+	EvenFit,
+};
+
+[[nodiscard]] inline const char *RtxVsrRejectReasonName(
+		RtxVsrRejectReason reason) {
+	switch (reason) {
+	case RtxVsrRejectReason::None: return "none";
+	case RtxVsrRejectReason::EmptyTarget: return "empty-target";
+	case RtxVsrRejectReason::TinySource: return "tiny-source";
+	case RtxVsrRejectReason::TargetNotLarger: return "target-not-larger";
+	case RtxVsrRejectReason::OneSide: return "one-side";
+	case RtxVsrRejectReason::AlreadyLarge: return "already-large";
+	case RtxVsrRejectReason::EvenFit: return "even-fit";
+	}
+	return "other";
 }
 
 [[nodiscard]] inline RtxVsrSize RtxFitEven(
@@ -157,6 +218,7 @@ struct RtxVsrSession {
 		RtxVsrSize source,
 		RtxVsrSize target) {
 	auto result = RtxVsrOutputList();
+	source = RtxEvenSize(source);
 	if ((source.width < kRtxVsrMinSourceEdge)
 		|| (source.height < kRtxVsrMinSourceEdge)
 		|| (source.width % 2)
@@ -200,6 +262,44 @@ struct RtxVsrSession {
 		}
 	}
 	return result;
+}
+
+[[nodiscard]] inline RtxVsrRejectReason RtxVsrRejectReasonFor(
+		RtxVsrSize source,
+		RtxVsrSize target) {
+	if (target.isEmpty()) {
+		return RtxVsrRejectReason::EmptyTarget;
+	}
+	source = RtxEvenSize(source);
+	if ((source.width < kRtxVsrMinSourceEdge)
+		|| (source.height < kRtxVsrMinSourceEdge)) {
+		return RtxVsrRejectReason::TinySource;
+	}
+	if (RtxVsrOutputs(source, target).count) {
+		return RtxVsrRejectReason::None;
+	}
+	const auto wider = target.width > source.width;
+	const auto taller = target.height > source.height;
+	if (wider && taller) {
+		const auto cappedWidth = int(std::min(
+			std::min(
+				std::int64_t(target.width),
+				std::int64_t(source.width) * kRtxVsrMaxScale),
+			std::int64_t(kRtxVsrMaxLongEdge)));
+		const auto cappedHeight = int(std::min(
+			std::min(
+				std::int64_t(target.height),
+				std::int64_t(source.height) * kRtxVsrMaxScale),
+			std::int64_t(kRtxVsrMaxLongEdge)));
+		if (cappedWidth <= source.width || cappedHeight <= source.height) {
+			return RtxVsrRejectReason::AlreadyLarge;
+		}
+		return RtxVsrRejectReason::EvenFit;
+	}
+	if (wider || taller) {
+		return RtxVsrRejectReason::OneSide;
+	}
+	return RtxVsrRejectReason::TargetNotLarger;
 }
 
 [[nodiscard]] inline RtxVsrPlan PlanRtxVideoSuperResolution(
@@ -302,6 +402,103 @@ struct RtxVsrSession {
 		int sourceMax,
 		int outputMax) {
 	return (sourceMax > 16) && (outputMax == 0);
+}
+
+enum class RtxHdrDecision {
+	Skip,
+	ToneMap,
+};
+
+struct RtxHdrPlan {
+	RtxHdrDecision decision = RtxHdrDecision::Skip;
+
+};
+
+enum class RtxHdrSkipReason {
+	None,
+	Disabled,
+	Unsupported,
+	Blocked,
+	DisplaySdr,
+	SourceHdr,
+	Rotated,
+	Alpha,
+};
+
+[[nodiscard]] inline const char *RtxHdrSkipReasonName(
+		RtxHdrSkipReason reason) {
+	switch (reason) {
+	case RtxHdrSkipReason::None: return "none";
+	case RtxHdrSkipReason::Disabled: return "disabled";
+	case RtxHdrSkipReason::Unsupported: return "unsupported";
+	case RtxHdrSkipReason::Blocked: return "blocked";
+	case RtxHdrSkipReason::DisplaySdr: return "display-sdr";
+	case RtxHdrSkipReason::SourceHdr: return "source-hdr";
+	case RtxHdrSkipReason::Rotated: return "rotated";
+	case RtxHdrSkipReason::Alpha: return "alpha";
+	}
+	return "other";
+}
+
+[[nodiscard]] inline RtxHdrSkipReason RtxHdrSkipReasonFor(
+		bool enabled,
+		bool supported,
+		bool blocked,
+		bool displayHdr,
+		bool sourceHdr,
+		bool rotated,
+		bool alpha) {
+	if (!enabled) {
+		return RtxHdrSkipReason::Disabled;
+	}
+	if (!supported) {
+		return RtxHdrSkipReason::Unsupported;
+	}
+	if (blocked) {
+		return RtxHdrSkipReason::Blocked;
+	}
+	if (!displayHdr) {
+		return RtxHdrSkipReason::DisplaySdr;
+	}
+	if (sourceHdr) {
+		return RtxHdrSkipReason::SourceHdr;
+	}
+	if (rotated) {
+		return RtxHdrSkipReason::Rotated;
+	}
+	if (alpha) {
+		return RtxHdrSkipReason::Alpha;
+	}
+	return RtxHdrSkipReason::None;
+}
+
+[[nodiscard]] inline RtxHdrPlan PlanRtxVideoHdr(
+		bool enabled,
+		bool supported,
+		bool blocked,
+		bool displayHdr,
+		bool sourceHdr,
+		bool rotated,
+		bool alpha) {
+	auto plan = RtxHdrPlan();
+	if (RtxHdrSkipReasonFor(
+			enabled,
+			supported,
+			blocked,
+			displayHdr,
+			sourceHdr,
+			rotated,
+			alpha) == RtxHdrSkipReason::None) {
+		plan.decision = RtxHdrDecision::ToneMap;
+	}
+	return plan;
+}
+
+// The player shortcut is shown but grayed out unless both are true.
+[[nodiscard]] inline bool RtxHdrShortcutAvailable(
+		bool supported,
+		bool displayHdr) {
+	return supported && displayHdr;
 }
 
 } // namespace Media::Streaming

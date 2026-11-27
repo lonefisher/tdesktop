@@ -9,6 +9,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 #include "data/data_file_origin.h"
 #include "media/streaming/media_streaming_instance.h"
+#include "media/streaming/media_streaming_rtx_vsr.h"
 #include "media/media_common.h"
 #include "ui/effects/animations.h"
 #include "ui/round_rect.h"
@@ -219,7 +220,8 @@ private:
 
 	[[nodiscard]] bool canUseVideoFrame() const;
 	[[nodiscard]] QImage videoFrame(const FrameRequest &request) const;
-	[[nodiscard]] Streaming::FrameWithInfo videoFrameWithInfo() const; // YUV
+	[[nodiscard]] Streaming::FrameWithInfo videoFrameWithInfo(
+		Streaming::RtxVsrPath path = Streaming::RtxVsrPath::Pip) const;
 	[[nodiscard]] QImage staticContent() const;
 	[[nodiscard]] OverState computeState(QPoint position) const;
 	void setOverState(OverState state);

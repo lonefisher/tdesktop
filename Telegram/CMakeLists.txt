@@ -76,6 +76,8 @@ include(cmake/test_iv_editor_table_grid.cmake)
 include(cmake/test_wallet_card_tint.cmake)
 include(cmake/test_wallet_phrase_shares.cmake)
 include(cmake/test_rtx_vsr.cmake)
+include(cmake/test_rtx_fg.cmake)
+include(cmake/test_rtx_nr.cmake)
 
 set_target_properties(Telegram PROPERTIES AUTOMOC ON)
 
@@ -1664,9 +1666,15 @@ PRIVATE
     media/streaming/media_streaming_reader.h
     media/streaming/media_streaming_round_preview.cpp
     media/streaming/media_streaming_round_preview.h
+    media/streaming/media_streaming_rtx_fg.cpp
+    media/streaming/media_streaming_rtx_fg.h
+    media/streaming/media_streaming_rtx_fg_plan.h
     media/streaming/media_streaming_rtx_vsr.cpp
     media/streaming/media_streaming_rtx_vsr.h
     media/streaming/media_streaming_rtx_vsr_plan.h
+    media/streaming/media_streaming_rtx_nr.cpp
+    media/streaming/media_streaming_rtx_nr.h
+    media/streaming/media_streaming_rtx_nr_plan.h
     media/streaming/media_streaming_utility.cpp
     media/streaming/media_streaming_utility.h
     media/streaming/media_streaming_video_track.cpp
@@ -1707,6 +1715,8 @@ PRIVATE
     media/view/media_view_playback_progress.h
     media/view/media_view_playback_sponsored.cpp
     media/view/media_view_playback_sponsored.h
+    media/view/media_view_video_enhance.cpp
+    media/view/media_view_video_enhance.h
     media/view/media_view_video_stream.cpp
     media/view/media_view_video_stream.h
     media/system_media_controls_manager.h
@@ -2722,7 +2732,10 @@ if (WIN32)
         target_link_libraries(Telegram PRIVATE desktop-app::win_directx_helper)
     endif()
 
-    target_link_libraries(Telegram PRIVATE d3d11 dxgi)
+    target_link_libraries(Telegram PRIVATE d3d11 d3d12 dxgi wintrust crypt32 version)
+    if (MSVC)
+        target_link_options(Telegram PRIVATE /DELAYLOAD:d3d12.dll)
+    endif()
 
     if (DESKTOP_APP_WIN7_BASELINE)
         # ANGLE loads d3dcompiler_47.dll from modules folder next to exe.
