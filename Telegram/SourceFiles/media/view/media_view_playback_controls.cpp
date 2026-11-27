@@ -114,7 +114,7 @@ EnhanceToggle::EnhanceToggle(
 	EnhanceKind kind,
 	Fn<void()> onClick,
 	Fn<void()> relayout)
-: Ui::RippleButton(parent, st::mediaviewSpeedButton.ripple)
+: Ui::RippleButton(parent, st::defaultRippleAnimation)
 , _relayout(std::move(relayout)) {
 	setMouseTracking(true);
 	setPointerCursor(false);
