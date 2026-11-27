@@ -6,6 +6,7 @@ For license and copyright information please follow this link:
 https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "media/streaming/media_streaming_rtx_nr_plan.h"
+#include "media/view/media_view_enhance_bar.h"
 
 #include <cstdio>
 #include <cstring>
@@ -226,6 +227,141 @@ void TestCreateBudgetAndHdrPlace() {
 	Check(NextEnhancementWakeMs(1, 4) == 1, "fast frame can wake soon");
 }
 
+using namespace Media::View;
+
+ViewerControlMetrics BarMetrics(int barWidth) {
+	return {
+		.barWidth = barWidth,
+		.volumeLeft = 6,
+		.volumeToggleWidth = 32,
+		.volumeSkip = 3,
+		.volumeSliderWidth = 75,
+		.playWidth = 40,
+		.buttonsRight = 8,
+		.speedWidth = 32,
+		.pipSkip = 4,
+		.pipWidth = 32,
+		.fullSkip = 4,
+		.fullWidth = 32,
+		.rowTop = 6,
+		.rowHeight = 32,
+	};
+}
+
+EnhanceBarLayout BarLayout(int barWidth, int preferred) {
+	const auto rects = LayoutViewerControls(BarMetrics(barWidth));
+	return LayoutEnhanceBar(EnhanceBarFromControls(
+		rects,
+		6,
+		32,
+		1,
+		2,
+		22,
+		preferred));
+}
+
+void TestEnhanceBar() {
+	const auto wideRects = LayoutViewerControls(BarMetrics(480));
+	Check(wideRects.volumeRight == 116, "wide volume ends");
+	Check(wideRects.playLeft == 220, "wide play left");
+	Check(wideRects.playRight == 260, "wide play right");
+	Check(wideRects.speedLeft == 440, "wide speed");
+	Check(wideRects.pipLeft == 404, "wide pip");
+	Check(wideRects.fullLeft == 368, "wide fullscreen");
+	const auto wide = BarLayout(480, 28);
+	Check(EnhanceBarShownCount(wide) == 4, "wide shows four");
+	Check(EnhanceBarOnSpeedRow(wide, 6, 32), "wide shares the speed row");
+	Check(!EnhanceBarOverlapsCore(wide, wideRects), "wide misses core");
+	Check(!EnhanceBarOverlapsBand(wide, 49, 61), "wide misses the progress");
+	for (const auto &slot : wide.slot) {
+		Check(slot.shown, "wide slot shown");
+		Check(slot.x >= wideRects.playRight, "wide sits right of play");
+		Check(
+			slot.x + slot.width <= wideRects.clusterLeft,
+			"wide sits left of fullscreen");
+	}
+	const auto wideLabel = PlaceDownloadLabel(
+		36,
+		14,
+		2,
+		40,
+		wideRects,
+		wide);
+	Check(wideLabel.shown, "wide keeps the download label");
+	Check(wideLabel.x >= wideRects.volumeRight, "label clears volume");
+	Check(
+		wideLabel.x + 36 <= wideRects.playLeft,
+		"label clears play");
+
+	const auto narrowRects = LayoutViewerControls(BarMetrics(368));
+	const auto narrow = BarLayout(368, 28);
+	Check(EnhanceBarShownCount(narrow) == 4, "narrow shows four");
+	Check(EnhanceBarOnSpeedRow(narrow, 6, 32), "narrow shares the speed row");
+	Check(!EnhanceBarOverlapsCore(narrow, narrowRects), "narrow misses core");
+	Check(!EnhanceBarOverlapsBand(narrow, 49, 61), "narrow misses progress");
+	Check(
+		narrow.slot[0].x >= narrowRects.volumeRight
+			&& narrow.slot[0].x + narrow.slot[0].width <= narrowRects.playLeft,
+		"narrow puts VSR between volume and play");
+	Check(
+		narrow.slot[3].x >= narrowRects.playRight
+			&& narrow.slot[3].x + narrow.slot[3].width
+				<= narrowRects.clusterLeft,
+		"narrow keeps NR beside the speed row");
+	const auto narrowLabel = PlaceDownloadLabel(
+		36,
+		14,
+		2,
+		40,
+		narrowRects,
+		narrow);
+	Check(!narrowLabel.shown, "narrow hides a label that would cover a control");
+
+	const auto tightRects = LayoutViewerControls(BarMetrics(220));
+	const auto tight = BarLayout(220, 28);
+	Check(EnhanceBarShownCount(tight) < 4, "tight hides what cannot fit");
+	Check(!EnhanceBarOverlapsCore(tight, tightRects), "tight misses core");
+
+	auto off = ApplyEnhanceToggleSettings(false, true);
+	const auto turnedOn = ApplyEnhanceToggleClick(off);
+	Check(turnedOn.stored && turnedOn.available, "click turns a switch on");
+	const auto turnedOff = ApplyEnhanceToggleClick(turnedOn);
+	Check(!turnedOff.stored && turnedOff.available, "click turns a switch off");
+	const auto fromSettings = ApplyEnhanceToggleSettings(true, true);
+	Check(
+		ReadEnhanceToggle(fromSettings).checked
+			&& ReadEnhanceToggle(fromSettings).enabled,
+		"settings on is checked and enabled");
+	const auto gray = ApplyEnhanceToggleSettings(true, false);
+	const auto stuck = ApplyEnhanceToggleClick(gray);
+	Check(stuck.stored && !stuck.available, "gray click keeps the stored bit");
+	Check(
+		ReadEnhanceToggle(gray).checked && !ReadEnhanceToggle(gray).enabled,
+		"gray stays checked and disabled");
+
+	const auto normalVideo = BarRect{ 0, 0, 800, 400 };
+	const auto normalBar = BarRect{ 160, 430, 480, 72 };
+	Check(
+		!HdrOverlayBlocksControlPoint(normalVideo, normalBar, true, 200, 460),
+		"normal bar is outside the overlay");
+	const auto covered = BarRect{ 0, 0, 800, 600 };
+	const auto zoomBar = BarRect{ 160, 500, 480, 72 };
+	Check(
+		!HdrOverlayBlocksControlPoint(covered, zoomBar, true, 240, 530),
+		"zoom bar is cut out");
+	Check(
+		!HdrOverlayBlocksControlPoint(covered, zoomBar, true, 400, 540),
+		"fullscreen bar is cut out");
+	Check(
+		HdrOverlayBlocksControlPoint(covered, zoomBar, false, 240, 530),
+		"hidden bar stays covered");
+	Check(
+		HdrOverlayBlocksControlPoint(covered, zoomBar, true, 400, 200),
+		"video outside the bar stays covered");
+	Check(IncludeControlBarInHdrCutout(true), "shown bar is cut out");
+	Check(!IncludeControlBarInHdrCutout(false), "hidden bar is not cut out");
+}
+
 void TestHistory() {
 	auto clock = RtxNrClock();
 	Check(RtxNrTakeReset(clock), "first frame resets");
@@ -244,6 +380,7 @@ int main() {
 	TestSignatureAndPath();
 	TestGate();
 	TestCreateBudgetAndHdrPlace();
+	TestEnhanceBar();
 	TestHistory();
 	if (Failed) {
 		std::fprintf(stderr, "rtx dlss nr plan tests failed: %d\n", Failed);

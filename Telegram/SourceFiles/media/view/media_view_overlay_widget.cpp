@@ -74,6 +74,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "media/streaming/media_streaming_rtx_fg.h"
 #include "media/streaming/media_streaming_rtx_nr.h"
 #include "media/streaming/media_streaming_rtx_vsr.h"
+#include "media/view/media_view_enhance_bar.h"
 #include "media/view/media_view_video_enhance.h"
 
 #if defined Q_OS_WIN
@@ -1664,13 +1665,13 @@ Streaming::FrameWithInfo OverlayWidget::videoFrameWithInfo(
 		request.windowId,
 		logical,
 		top->devicePixelRatioF());
+	auto holes = QRegion();
+	const auto add = [&](QRect rect) {
+		if (!rect.isEmpty()) {
+			holes += rect;
+		}
+	};
 	if (_controlsOpacity.current() > 0.02) {
-		auto holes = QRegion();
-		const auto add = [&](QRect rect) {
-			if (!rect.isEmpty()) {
-				holes += rect;
-			}
-		};
 		add(_bottomShadowRect);
 		add(_topShadowRect);
 		add(footerGeometry());
@@ -1687,11 +1688,14 @@ Streaming::FrameWithInfo OverlayWidget::videoFrameWithInfo(
 		add(_headerNav);
 		add(_nameNav);
 		add(_dateNav);
-		if (_streamed
-			&& _streamed->controls
-			&& !_streamed->controls->isHidden()) {
-			add(_streamed->controls->geometry());
-		}
+	}
+	if (_streamed
+		&& _streamed->controls
+		&& IncludeControlBarInHdrCutout(
+			_streamed->controls->acceptsHdrCutout())) {
+		add(_streamed->controls->geometry());
+	}
+	if (!holes.isEmpty()) {
 		const auto origin = widget()->mapTo(top, QPoint());
 		auto screenHoles = QRegion();
 		for (const auto &rect : holes) {
@@ -5477,6 +5481,7 @@ void OverlayWidget::streamingReady(Streaming::Information &&info) {
 		if (_streamed && _streamed->controls) {
 			crl::on_main(_widget, [=] {
 				if (_streamed && _streamed->controls) {
+					_streamed->controls->setVideoEnhanceVisible(videoShown());
 					_streamed->controls->updateSpeedToggleQuality();
 				}
 			});
@@ -6376,6 +6381,7 @@ void OverlayWidget::updatePlaybackState() {
 	if (state.position != kTimeUnknown && state.length != kTimeUnknown) {
 		_streamedPosition = state.position;
 		if (_streamed->controls) {
+			_streamed->controls->setVideoEnhanceVisible(videoShown());
 			_streamed->controls->updatePlayback(state);
 			_streamed->controls->updateSpeedToggleQuality();
 			_touchbarTrackState.fire_copy(state);

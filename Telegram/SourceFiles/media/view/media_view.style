@@ -425,6 +425,19 @@ mediaviewSpeedButton: MediaSpeedButton(mediaPlayerSpeedButton) {
 	menuPosition: point(-2px, 31px);
 }
 
+mediaviewEnhanceMinWidth: 22px;
+mediaviewEnhanceMaxWidth: 32px;
+mediaviewEnhanceSkip: 2px;
+mediaviewEnhanceGuard: 1px;
+mediaviewEnhanceTextSkip: 3px;
+mediaviewEnhanceRadius: 6px;
+mediaviewEnhanceStroke: 1px;
+mediaviewEnhanceInset: margins(0px, 4px, 0px, 4px);
+mediaviewEnhanceText: LabelSimple(mediaviewPlayProgressLabel) {
+	font: font(9px semibold);
+	textFg: mediaviewPlaybackIconFg;
+}
+
 themePreviewSize: size(903px, 584px);
 themePreviewBg: windowBg;
 themePreviewOverlayOpacity: 0.8;
